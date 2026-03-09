@@ -316,142 +316,19 @@ def show_tracking():
             </div>""", unsafe_allow_html=True)
 
     # ── Camera loop ───────────────────────────────────────────────────────
-    if st.session_state.cam_running:
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            st.error("❌ Cannot open camera. Check your webcam is connected.")
-            st.session_state.cam_running = False
-            st.stop()
-
-        prev_reps = detector.reps
-
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            frame = cv2.flip(frame, 1)
-            frame, landmarks = pose_det.find_pose(frame)
-            result = detector.process(landmarks)
-
-            h, w, _ = frame.shape
-
-            # Angle label on joint
-            if landmarks:
-                mp_pose = mp.solutions.pose.PoseLandmark
-                knee_lm = landmarks[mp_pose.LEFT_KNEE.value]
-                cx, cy  = int(knee_lm.x * w), int(knee_lm.y * h)
-                cv2.putText(frame, f"{result['angle']}deg",
-                            (cx - 25, cy - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-
-            # Form banner — small strip at bottom
-            if result["form_ok"]:
-                banner_color = (0, 180, 70)
-                banner_text  = "GOOD FORM"
-            else:
-                banner_color = (40, 40, 200)
-                banner_text  = "FIX FORM"
-
-            cv2.rectangle(frame, (0, h - 36), (w, h), (15, 15, 15), -1)
-            cv2.putText(frame, banner_text, (12, h - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, banner_color, 2)
-
-            if result["form_errors"]:
-                err_text = result["form_errors"][0].replace("⚠️ ", "")
-                cv2.putText(frame, err_text, (int(w * 0.28), h - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 180, 255), 1)
-
-            # Reps overlay — smaller, top left
-            cv2.rectangle(frame, (0, 0), (180, 52), (15, 15, 15), -1)
-            cv2.putText(frame, f"REPS  {result['reps']}/{target}", (8, 22),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 120), 2)
-            cv2.putText(frame, result["stage"].upper(), (8, 44),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_placeholder.image(rgb, channels="RGB", use_container_width=True)
-
-            # ── Stat boxes ────────────────────────────────────────────────
-            progress = min(result["reps"] / target, 1.0)
-            pct      = int(progress * 100)
-
-            reps_display.markdown(f"""
-            <div class='stat-box'>
-                <div class='stat-label'>Reps Done</div>
-                <div class='stat-value'>{result['reps']}
-                    <span style='font-size:1.1rem;color:#888'>/ {target}</span>
-                </div>
-            </div>""", unsafe_allow_html=True)
-
-            progress_display.progress(progress, text=f"{pct}% of target complete")
-
-            stage_display.markdown(f"""
-            <div class='stat-box' style='border-color:#a855f7'>
-                <div class='stat-label'>Stage</div>
-                <div class='stat-value' style='font-size:1.5rem'>
-                    {result['stage'].upper()}
-                </div>
-            </div>""", unsafe_allow_html=True)
-
-            angle_display.markdown(f"""
-            <div class='stat-box' style='border-color:#f59e0b'>
-                <div class='stat-label'>Joint Angle</div>
-                <div class='stat-value' style='font-size:1.5rem'>
-                    {result['angle']}°
-                </div>
-            </div>""", unsafe_allow_html=True)
-
-            feedback_display.markdown(f"""
-            <div class='feedback-box'>
-                💬 {result['feedback']}
-            </div>""", unsafe_allow_html=True)
-
-            # ── Posture box ───────────────────────────────────────────────
-            if result["form_ok"]:
-                posture_display.markdown("""
-                <div class='good-form'>✅ Great form — keep it up!</div>
-                """, unsafe_allow_html=True)
-            else:
-                errors = "<br>".join(result["form_errors"])
-                posture_display.markdown(f"""
-                <div class='bad-form'>{errors}</div>
-                """, unsafe_allow_html=True)
-
-            # ── History ───────────────────────────────────────────────────
-            if result["reps"] > prev_reps:
-                st.session_state.history.append({
-                    "Rep":   result["reps"],
-                    "Angle": f"{result['angle']}°",
-                    "Form":  "✅" if result["form_ok"] else "⚠️",
-                })
-                prev_reps = result["reps"]
-
-            if st.session_state.history:
-                history_display.dataframe(
-                    st.session_state.history,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            # ── Done ──────────────────────────────────────────────────────
-            if result["reps"] >= target:
-                cap.release()
-                st.session_state.cam_running = False
-                st.success(f"🎉 You completed {target} reps of {ex['label']}! Great work!")
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button("🔀 Try Another Exercise", use_container_width=True):
-                        st.session_state.page = "select_exercise"
-                        st.rerun()
-                with c2:
-                    if st.button("🔁 Repeat This Exercise", use_container_width=True):
-                        detector.reset()
-                        st.session_state.history = []
-                        st.rerun()
-                break
-
-        cap.release()
+        if st.session_state.cam_running:
+            from streamlit_webrtc import webrtc_streamer
+            import av
+            def video_frame_callback(frame):
+                img = frame.to_ndarray(format="bgr24")
+                img = cv2.flip(img, 1)
+                img, landmarks = pose_det.find_pose(img)
+                result = detector.process(landmarks)
+                return av.VideoFrame.from_ndarray(img, format="bgr24")
+            webrtc_streamer(
+                key="physio-camera",
+                video_frame_callback=video_frame_callback
+            )
 
 
 # ── Router ────────────────────────────────────────────────────────────────────
