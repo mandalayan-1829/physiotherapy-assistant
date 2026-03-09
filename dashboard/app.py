@@ -325,7 +325,7 @@ def show_tracking():
                 img, landmarks = pose_det.find_pose(img)
                 result = detector.process(landmarks)
                 return av.VideoFrame.from_ndarray(img, format="bgr24")
-            webrtc_streamer(
+            ctx = webrtc_streamer(
                 key="physio-camera",
                 video_frame_callback=video_frame_callback
             )
