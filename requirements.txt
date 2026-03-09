@@ -5,3 +5,4 @@ opencv-python-headless==4.9.0.80
 mediapipe==0.10.14
 matplotlib==3.8.4
 Pillow==10.4.0
+streamlit-webrtc
