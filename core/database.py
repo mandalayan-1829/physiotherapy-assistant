@@ -110,6 +110,16 @@ def init_db():
         date          TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (user_id) REFERENCES users(id))""")
 
+    # ── Migrate old sessions table if missing new columns ─────────────────
+    existing_session_cols = [row[1] for row in c.execute("PRAGMA table_info(sessions)").fetchall()]
+    session_new_cols = [
+        ("duration_sec",  "INTEGER DEFAULT 0"),
+        ("notes",         "TEXT DEFAULT ''"),
+    ]
+    for col_name, col_def in session_new_cols:
+        if col_name not in existing_session_cols:
+            c.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_def}")
+
     # ── Diet log ──────────────────────────────────────────────────────────
     c.execute("""CREATE TABLE IF NOT EXISTS diet_log (
         id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,7 +257,7 @@ def save_session(user_id, exercise, reps, form_accuracy, duration_sec=0, notes="
 
 def get_user_sessions(user_id):
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM sessions WHERE user_id=? ORDER BY date DESC",
+    rows = conn.execute("SELECT * FROM sessions WHERE user_id=? ORDER BY date DESC, id DESC",
                         (user_id,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -263,7 +273,7 @@ def get_sessions_summary(user_id):
 def get_recent_sessions(user_id, limit=5):
     conn = get_connection()
     rows = conn.execute("""SELECT * FROM sessions WHERE user_id=?
-        ORDER BY date DESC LIMIT ?""", (user_id, limit)).fetchall()
+        ORDER BY date DESC, id DESC LIMIT ?""", (user_id, limit)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

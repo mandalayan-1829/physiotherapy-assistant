@@ -117,7 +117,11 @@ class ExerciseDetector:
             self.stage = "up"; self.reps += 1
             self.feedback = f"Rep {self.reps} done! Lower slowly."
         elif self.stage == "up":
-            self.feedback = "Lower arms fully before next raise."
+            if self.angle < 50:
+                self.stage = "down"
+                self.feedback = "Arms lowered. Raise to the side!"
+            else:
+                self.feedback = "Lower arms fully before next raise."
         if calculate_angle(shoulder, elbow, wrist) < 150:
             self.form_errors.append("⚠️ Keep arms straight — don't bend elbows!")
         if lm[LEFT_WRIST].y < lm[LEFT_SHOULDER].y - 0.05:
