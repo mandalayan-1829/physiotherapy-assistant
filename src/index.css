@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    @apply bg-white text-slate-800 antialiased selection:bg-blue-100 selection:text-blue-900;
+  }
+}
+
+/* Reusable Healthcare SaaS micro-layouts */
+.accordion-trigger {
+  @apply w-full flex items-center justify-between py-4 px-2 text-left transition-colors cursor-pointer select-none hover:bg-[#F0F7FF]/60;
+}
+
+.divider-subtle {
+  @apply border-b border-slate-200;
+}
+
+.compact-list-row {
+  @apply py-3 px-2.5 flex items-center justify-between border-b border-slate-100 transition-colors hover:bg-[#F0F7FF]/40;
+}
+

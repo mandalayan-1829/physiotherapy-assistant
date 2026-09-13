@@ -1,0 +1,6 @@
+{
+  "name": "PhysioAI",
+  "description": "AI-powered physiotherapy and rehabilitation assistant with real-time pose tracking, exercise form analysis, personalized recovery plans, diet tracking, and telehealth appointment booking.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
