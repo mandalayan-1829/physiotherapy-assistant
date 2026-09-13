@@ -1,4 +1,4 @@
-import { Appointment, DietEntry, Doctor, GuardianAlert, Message, Note, Session, User } from '../types';
+import { Appointment, DietEntry, Doctor, GuardianAlert, Message, MonthlyReport, DailyHistoryEntry, Note, Session, User, UserRole } from '../types';
 
 const STORAGE_KEYS = {
   USER: 'physio_user_profile',
@@ -9,8 +9,17 @@ const STORAGE_KEYS = {
   APPOINTMENTS: 'physio_appointments',
   MESSAGES: 'physio_telehealth_messages',
   ALERTS: 'physio_guardian_alerts',
-  INITIALIZED: 'physio_seeded_v1',
+  MONTHLY_REPORTS: 'physio_monthly_reports',
+  AUTH_ROLE: 'physio_auth_role',
+  ACTIVE_DOCTOR_ID: 'physio_active_doctor_id',
+  LAST_RESET_DATE: 'physio_last_reset_date',
+  INITIALIZED: 'physio_seeded_v2',
 };
+
+export function getTodayDateString(): string {
+  const now = new Date();
+  return now.toISOString().split('T')[0];
+}
 
 // Seed doctors from SQLite database (Dr. Aarav & Dr. Arjun Mehta)
 const INITIAL_DOCTORS: Doctor[] = [
@@ -100,6 +109,30 @@ const INITIAL_USER: User = {
 
 const INITIAL_SESSIONS: Session[] = [
   {
+    id: 101,
+    userId: 1,
+    exercise: 'squat',
+    exerciseLabel: 'Squat',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 94,
+    durationSec: 85,
+    notes: 'Upright torso and stable pelvic tilt. No knee valgus.',
+    date: `${new Date().toISOString().split('T')[0]} 09:30`,
+  },
+  {
+    id: 102,
+    userId: 1,
+    exercise: 'shoulder_raises',
+    exerciseLabel: 'Shoulder Raises',
+    reps: 12,
+    targetReps: 12,
+    formAccuracy: 90,
+    durationSec: 90,
+    notes: 'Smooth lateral abduction tempo.',
+    date: `${new Date().toISOString().split('T')[0]} 09:45`,
+  },
+  {
     id: 1,
     userId: 1,
     exercise: 'squat',
@@ -114,6 +147,18 @@ const INITIAL_SESSIONS: Session[] = [
   {
     id: 2,
     userId: 1,
+    exercise: 'cat_cow_stretch',
+    exerciseLabel: 'Cat-Cow Stretch',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 96,
+    durationSec: 120,
+    notes: 'Fluid spinal flexion and extension with synchronized exhalation.',
+    date: '2026-09-12 16:45',
+  },
+  {
+    id: 3,
+    userId: 1,
     exercise: 'shoulder_raises',
     exerciseLabel: 'Shoulder Raises',
     reps: 12,
@@ -122,18 +167,6 @@ const INITIAL_SESSIONS: Session[] = [
     durationSec: 92,
     notes: 'Controlled tempo. Slight torso swing on rep 11, quickly corrected.',
     date: '2026-09-11 17:15',
-  },
-  {
-    id: 3,
-    userId: 1,
-    exercise: 'cat_cow_stretch',
-    exerciseLabel: 'Cat-Cow Stretch',
-    reps: 10,
-    targetReps: 10,
-    formAccuracy: 95,
-    durationSec: 120,
-    notes: 'Deep rhythmic breathing coordinated with spine mobilization.',
-    date: '2026-09-10 08:45',
   },
   {
     id: 4,
@@ -145,7 +178,103 @@ const INITIAL_SESSIONS: Session[] = [
     formAccuracy: 90,
     durationSec: 110,
     notes: 'Sustained 5-second single-leg balances on both left and right sides.',
-    date: '2026-09-09 18:20',
+    date: '2026-09-11 18:20',
+  },
+  {
+    id: 5,
+    userId: 1,
+    exercise: 'cat_cow_stretch',
+    exerciseLabel: 'Cat-Cow Stretch',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 95,
+    durationSec: 120,
+    notes: 'Deep rhythmic breathing coordinated with spine mobilization.',
+    date: '2026-09-10 08:45',
+  },
+  {
+    id: 6,
+    userId: 1,
+    exercise: 'squat',
+    exerciseLabel: 'Squat',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 91,
+    durationSec: 80,
+    notes: 'Consistent depth reaching therapeutic 90-degree knee flexion.',
+    date: '2026-09-10 11:20',
+  },
+  {
+    id: 7,
+    userId: 1,
+    exercise: 'tree_pose',
+    exerciseLabel: 'Tree Pose',
+    reps: 4,
+    targetReps: 4,
+    formAccuracy: 92,
+    durationSec: 115,
+    notes: 'Core engaged, solid foot arch engagement.',
+    date: '2026-09-08 09:10',
+  },
+  {
+    id: 8,
+    userId: 1,
+    exercise: 'shoulder_raises',
+    exerciseLabel: 'Shoulder Raises',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 87,
+    durationSec: 80,
+    notes: 'Slight deltoid fatigue toward final repetitions.',
+    date: '2026-09-08 17:30',
+  },
+  {
+    id: 9,
+    userId: 1,
+    exercise: 'squat',
+    exerciseLabel: 'Squat',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 89,
+    durationSec: 82,
+    notes: 'Good cadence, hamstrings well activated.',
+    date: '2026-09-05 10:15',
+  },
+  {
+    id: 10,
+    userId: 1,
+    exercise: 'cat_cow_stretch',
+    exerciseLabel: 'Cat-Cow Stretch',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 93,
+    durationSec: 110,
+    notes: 'Thoracic extension improving significantly.',
+    date: '2026-09-05 10:45',
+  },
+  {
+    id: 11,
+    userId: 1,
+    exercise: 'squat',
+    exerciseLabel: 'Squat',
+    reps: 10,
+    targetReps: 10,
+    formAccuracy: 86,
+    durationSec: 90,
+    notes: 'August baseline calibration session.',
+    date: '2026-08-28 11:00',
+  },
+  {
+    id: 12,
+    userId: 1,
+    exercise: 'shoulder_raises',
+    exerciseLabel: 'Shoulder Raises',
+    reps: 12,
+    targetReps: 12,
+    formAccuracy: 84,
+    durationSec: 95,
+    notes: 'Initial mobility range check.',
+    date: '2026-08-24 16:00',
   },
 ];
 
@@ -201,10 +330,73 @@ const INITIAL_APPOINTMENTS: Appointment[] = [
     date: '2026-09-18',
     time: '11:00 AM',
     reason: 'Follow-up evaluation on knee joint mobility and squat depth progression.',
-    status: 'approved',
+    status: 'confirmed',
     adminNote: 'Confirmed by clinic. Please wear athletic shorts for range of motion check.',
     createdAt: '2026-09-12 14:20',
   },
+  {
+    id: 2,
+    userId: 1,
+    doctorId: 1,
+    doctorName: 'Dr. Aarav Patel',
+    specialization: 'Orthopedic Rehabilitation',
+    patientName: 'John Doe',
+    email: 'mandalayan1829@gmail.com',
+    date: getTodayDateString(),
+    time: '04:00 PM',
+    reason: 'Weekly kinematic posture check-in and bio-feedback alignment review.',
+    status: 'ready',
+    adminNote: 'Consultation room active. Doctor has prepared kinematic analysis reports.',
+    createdAt: `${getTodayDateString()} 08:30`,
+  },
+  {
+    id: 3,
+    userId: 1,
+    doctorId: 2,
+    doctorName: 'Dr. Arjun Mehta',
+    specialization: 'Spine & Neurological Physiotherapy',
+    patientName: 'John Doe',
+    email: 'mandalayan1829@gmail.com',
+    date: '2026-09-22',
+    time: '02:30 PM',
+    reason: 'Ergonomic lumbar spine routine review and desk posture adaptation.',
+    status: 'scheduled',
+    adminNote: 'Pending physician calendar confirmation.',
+    createdAt: `${getTodayDateString()} 10:15`,
+  },
+];
+
+const INITIAL_MONTHLY_REPORTS: MonthlyReport[] = [
+  {
+    id: 'report-2026-08',
+    monthKey: '2026-08',
+    monthName: 'August 2026',
+    generatedDate: '2026-08-31 18:00',
+    patientId: 1,
+    patientName: 'John Doe',
+    patientEmail: 'mandalayan1829@gmail.com',
+    assignedDoctorName: 'Dr. Aarav Patel',
+    assignedDoctorEmail: 'dr.aarav@physioai.health',
+    hasUpcomingCheckup: true,
+    totalSessions: 14,
+    totalReps: 136,
+    completedExercises: 3,
+    missedSessions: 2,
+    avgAccuracy: 86,
+    avgScore: 86,
+    adherencePercent: 88,
+    exerciseBreakdown: [
+      { exerciseLabel: 'Squat', sessions: 6, reps: 60, avgAccuracy: 86 },
+      { exerciseLabel: 'Shoulder Raises', sessions: 5, reps: 52, avgAccuracy: 85 },
+      { exerciseLabel: 'Cat-Cow Stretch', sessions: 3, reps: 24, avgAccuracy: 88 },
+    ],
+    progressTrend: '+6% improvement in lumbar stabilization compared to July.',
+    safetyEventsCount: 0,
+    warningsCount: 1,
+    emailStatus: 'Sent',
+    emailSentDate: '2026-08-31 18:05',
+    recipients: ['mandalayan1829@gmail.com', 'dr.aarav@physioai.health'],
+  }
 ];
 
 const INITIAL_MESSAGES: Message[] = [
@@ -239,7 +431,16 @@ export function initializeStorage() {
     localStorage.setItem(STORAGE_KEYS.APPOINTMENTS, JSON.stringify(INITIAL_APPOINTMENTS));
     localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(INITIAL_MESSAGES));
     localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify([]));
+    localStorage.setItem(STORAGE_KEYS.MONTHLY_REPORTS, JSON.stringify(INITIAL_MONTHLY_REPORTS));
+    localStorage.setItem(STORAGE_KEYS.LAST_RESET_DATE, getTodayDateString());
     localStorage.setItem(STORAGE_KEYS.INITIALIZED, 'true');
+  }
+
+  // Daily reset check: update LAST_RESET_DATE if new day, ensuring daily counters reflect only today
+  const lastReset = localStorage.getItem(STORAGE_KEYS.LAST_RESET_DATE);
+  const today = getTodayDateString();
+  if (lastReset !== today) {
+    localStorage.setItem(STORAGE_KEYS.LAST_RESET_DATE, today);
   }
 }
 
@@ -252,6 +453,33 @@ export function getUserProfile(): User {
 
 export function saveUserProfile(user: User) {
   localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+}
+
+// Auth Role
+export function getStoredAuthRole(): UserRole | null {
+  if (typeof window === 'undefined') return 'patient';
+  const role = localStorage.getItem(STORAGE_KEYS.AUTH_ROLE);
+  return (role === 'doctor' || role === 'patient') ? (role as UserRole) : 'patient';
+}
+
+export function setStoredAuthRole(role: UserRole | null) {
+  if (typeof window === 'undefined') return;
+  if (role) {
+    localStorage.setItem(STORAGE_KEYS.AUTH_ROLE, role);
+  } else {
+    localStorage.removeItem(STORAGE_KEYS.AUTH_ROLE);
+  }
+}
+
+export function getActiveDoctorId(): number {
+  if (typeof window === 'undefined') return 1;
+  const raw = localStorage.getItem(STORAGE_KEYS.ACTIVE_DOCTOR_ID);
+  return raw ? parseInt(raw, 10) : 1;
+}
+
+export function setActiveDoctorId(id: number) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(STORAGE_KEYS.ACTIVE_DOCTOR_ID, id.toString());
 }
 
 // Sessions
@@ -270,6 +498,191 @@ export function addSession(session: Omit<Session, 'id'>): Session {
   sessions.unshift(newSession);
   localStorage.setItem(STORAGE_KEYS.SESSIONS, JSON.stringify(sessions));
   return newSession;
+}
+
+// Today's sessions filter (Resets every new day; keeps historical permanent)
+export function getTodaySessions(allSessions?: Session[]): Session[] {
+  const sessions = allSessions || getSessions();
+  const today = getTodayDateString();
+  return sessions.filter((s) => s.date.startsWith(today));
+}
+
+// Historical daily tracking aggregation
+export function getHistoricalDailyEntries(allSessions?: Session[]): DailyHistoryEntry[] {
+  const sessions = allSessions || getSessions();
+  const groups: { [dateStr: string]: Session[] } = {};
+
+  sessions.forEach((s) => {
+    const dateKey = s.date.split(' ')[0] || s.date;
+    if (!groups[dateKey]) {
+      groups[dateKey] = [];
+    }
+    groups[dateKey].push(s);
+  });
+
+  const sortedDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+
+  return sortedDates.map((dateStr) => {
+    const daySessions = groups[dateStr];
+    const totalReps = daySessions.reduce((acc, s) => acc + s.reps, 0);
+    const avgScore = Math.round(daySessions.reduce((acc, s) => acc + s.formAccuracy, 0) / daySessions.length);
+    const totalDurationSec = daySessions.reduce((acc, s) => acc + s.durationSec, 0);
+    const correctReps = Math.round(totalReps * (avgScore / 100));
+    const incorrectReps = totalReps - correctReps;
+    const uniqueExercises = Array.from(new Set(daySessions.map((s) => s.exerciseLabel)));
+
+    // Parse friendly display date
+    let displayDate = dateStr;
+    try {
+      const parts = dateStr.split('-');
+      if (parts.length === 3) {
+        const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        displayDate = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+      }
+    } catch {
+      // fallback
+    }
+
+    return {
+      date: dateStr,
+      displayDate,
+      sessionsCount: daySessions.length,
+      totalReps,
+      correctReps,
+      incorrectReps,
+      avgFormScore: avgScore,
+      totalDurationSec,
+      exercises: uniqueExercises,
+      warningsCount: avgScore < 90 ? 1 : 0,
+      safetyEventsCount: 0,
+      sessions: daySessions,
+    };
+  });
+}
+
+// Monthly Reports
+export function getMonthlyReports(): MonthlyReport[] {
+  initializeStorage();
+  const raw = localStorage.getItem(STORAGE_KEYS.MONTHLY_REPORTS);
+  return raw ? JSON.parse(raw) : INITIAL_MONTHLY_REPORTS;
+}
+
+export function saveMonthlyReport(report: MonthlyReport): MonthlyReport {
+  const reports = getMonthlyReports();
+  const index = reports.findIndex((r) => r.id === report.id || r.monthKey === report.monthKey);
+  if (index >= 0) {
+    reports[index] = report;
+  } else {
+    reports.unshift(report);
+  }
+  localStorage.setItem(STORAGE_KEYS.MONTHLY_REPORTS, JSON.stringify(reports));
+  return report;
+}
+
+export function generateMonthlyReport(
+  monthKey: string, // e.g. "2026-09"
+  user: User,
+  sessions: Session[],
+  appointments: Appointment[],
+  doctors: Doctor[]
+): MonthlyReport {
+  const monthSessions = sessions.filter((s) => s.date.startsWith(monthKey));
+  const totalSessions = monthSessions.length;
+  const totalReps = monthSessions.reduce((acc, s) => acc + s.reps, 0);
+  const avgAccuracy = totalSessions > 0
+    ? Math.round(monthSessions.reduce((acc, s) => acc + s.formAccuracy, 0) / totalSessions)
+    : 92;
+
+  // Exercise-wise breakdown
+  const exerciseMap: { [label: string]: { sessions: number; reps: number; totalAcc: number } } = {};
+  monthSessions.forEach((s) => {
+    if (!exerciseMap[s.exerciseLabel]) {
+      exerciseMap[s.exerciseLabel] = { sessions: 0, reps: 0, totalAcc: 0 };
+    }
+    exerciseMap[s.exerciseLabel].sessions += 1;
+    exerciseMap[s.exerciseLabel].reps += s.reps;
+    exerciseMap[s.exerciseLabel].totalAcc += s.formAccuracy;
+  });
+
+  const exerciseBreakdown = Object.keys(exerciseMap).map((label) => ({
+    exerciseLabel: label,
+    sessions: exerciseMap[label].sessions,
+    reps: exerciseMap[label].reps,
+    avgAccuracy: Math.round(exerciseMap[label].totalAcc / exerciseMap[label].sessions),
+  }));
+
+  // Month name
+  const [yearStr, monthStr] = monthKey.split('-');
+  const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const monthIndex = parseInt(monthStr, 10) - 1;
+  const monthName = `${monthNames[monthIndex] || 'Selected Month'} ${yearStr}`;
+
+  // Check upcoming appointment with assigned doctor
+  const upcomingAppointment = appointments.find(
+    (a) => (a.status === 'confirmed' || a.status === 'scheduled' || a.status === 'ready' || a.status === 'approved') &&
+           a.date >= getTodayDateString()
+  );
+
+  const assignedDoc = doctors.find((d) => d.name === user.doctorName) || doctors[0];
+  const hasUpcomingCheckup = !!upcomingAppointment;
+
+  const now = new Date();
+  const generatedDate = `${now.toISOString().split('T')[0]} ${now.toTimeString().slice(0, 5)}`;
+
+  const newReport: MonthlyReport = {
+    id: `report-${monthKey}`,
+    monthKey,
+    monthName,
+    generatedDate,
+    patientId: user.id,
+    patientName: user.name,
+    patientEmail: user.email,
+    assignedDoctorName: assignedDoc?.name || 'Dr. Aarav Patel',
+    assignedDoctorEmail: assignedDoc?.email || 'dr.aarav@physioai.health',
+    hasUpcomingCheckup,
+    totalSessions,
+    totalReps,
+    completedExercises: exerciseBreakdown.length,
+    missedSessions: totalSessions > 0 ? 1 : 4,
+    avgAccuracy,
+    avgScore: avgAccuracy,
+    adherencePercent: totalSessions >= 10 ? 94 : totalSessions >= 5 ? 85 : 70,
+    exerciseBreakdown,
+    progressTrend: '+8% improvement in joint kinematic angle stability across rehabilitation workouts.',
+    safetyEventsCount: 0,
+    warningsCount: 0,
+    emailStatus: 'Draft',
+    recipients: [user.email],
+  };
+
+  return saveMonthlyReport(newReport);
+}
+
+export function sendMonthlyReportEmail(reportId: string): MonthlyReport | null {
+  const reports = getMonthlyReports();
+  const report = reports.find((r) => r.id === reportId);
+  if (!report) return null;
+
+  const now = new Date();
+  const timeStr = `${now.toISOString().split('T')[0]} ${now.toTimeString().slice(0, 5)}`;
+
+  // Rule: Send to patient email. Send to doctor email ONLY when the patient has a scheduled checkup/appointment.
+  const recipients = [report.patientEmail];
+  if (report.hasUpcomingCheckup && report.assignedDoctorEmail) {
+    if (!recipients.includes(report.assignedDoctorEmail)) {
+      recipients.push(report.assignedDoctorEmail);
+    }
+  }
+
+  const updated: MonthlyReport = {
+    ...report,
+    emailStatus: 'Sent',
+    emailSentDate: timeStr,
+    recipients,
+  };
+
+  saveMonthlyReport(updated);
+  return updated;
 }
 
 // Diet

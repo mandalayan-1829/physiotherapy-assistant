@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Navbar, NavTab } from './components/Navbar';
+import { Sidebar, AppNavTab, PatientNavTab, DoctorNavTab } from './components/Sidebar';
+import { PortalAuth } from './components/PortalAuth';
+import { AccountProfileModal } from './components/AccountProfileModal';
 import { DashboardHome } from './views/DashboardHome';
+import { DoctorDashboard } from './views/DoctorDashboard';
 import { ExerciseSelectionView } from './views/ExerciseSelectionView';
 import { TrackingView } from './views/TrackingView';
 import { TelehealthView } from './views/TelehealthView';
+import { ReportsView } from './views/ReportsView';
+import { HistoryView } from './views/HistoryView';
 import { DietTrackerView } from './views/DietTrackerView';
 import { ProgressAnalyticsView } from './views/ProgressAnalyticsView';
 import { NotesView } from './views/NotesView';
@@ -12,6 +17,7 @@ import { AdminPortalView } from './views/AdminPortalView';
 
 import { 
   Appointment, 
+  AppointmentStatus, 
   DietEntry, 
   Doctor, 
   Exercise, 
@@ -19,7 +25,8 @@ import {
   Message, 
   Note, 
   Session, 
-  User 
+  User, 
+  UserRole 
 } from './types';
 import { 
   addDietEntry, 
@@ -27,6 +34,7 @@ import {
   addNote, 
   addSession, 
   bookAppointment, 
+  clearStoredAuthRole, 
   deleteDietEntry, 
   deleteNote, 
   getAppointments, 
@@ -36,17 +44,29 @@ import {
   getMessages, 
   getNotes, 
   getSessions, 
+  getStoredAuthRole, 
   getUserProfile, 
   initializeStorage, 
   saveUserProfile, 
   sendMessage, 
+  setStoredAuthRole, 
   updateAppointmentStatus 
 } from './utils/storage';
 import { EXERCISES } from './data/exercises';
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
+  // Authentication Role: 'patient' | 'doctor' | null (if null, show dual PortalAuth screen)
+  const [authRole, setAuthRole] = useState<UserRole | null>(() => {
+    // If not set yet, defaults to 'patient' for immediate preview, but user can click switch domain anytime
+    return getStoredAuthRole() || 'patient';
+  });
+
+  const [currentTab, setCurrentTab] = useState<AppNavTab>('home');
   
+  // Profile modal state
+  const [profileModalOpen, setProfileModalOpen] = useState<boolean>(false);
+  const [profileModalTab, setProfileModalTab] = useState<'general' | 'medical' | 'settings'>('general');
+
   // Active workout state
   const [activeExercise, setActiveExercise] = useState<Exercise | null>(null);
   const [activeTargetReps, setActiveTargetReps] = useState<number>(10);
@@ -74,11 +94,30 @@ export function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Handlers
+  // Auth Handlers
+  const handleLogin = (role: UserRole) => {
+    setStoredAuthRole(role);
+    setAuthRole(role);
+    setCurrentTab(role === 'patient' ? 'home' : 'doctor_dashboard');
+    showToast(`Signed into ${role === 'patient' ? 'Patient Portal' : 'Doctor / Clinician Console'}`);
+  };
+
+  const handleLogout = () => {
+    clearStoredAuthRole();
+    setAuthRole(null);
+    showToast('Logged out. Select a portal domain to continue.');
+  };
+
+  const handleOpenProfileModal = (tab: 'general' | 'medical' | 'settings' = 'general') => {
+    setProfileModalTab(tab);
+    setProfileModalOpen(true);
+  };
+
+  // Exercise tracking handlers
   const handleStartExercise = (exercise: Exercise, targetReps: number = 10) => {
     setActiveExercise(exercise);
     setActiveTargetReps(targetReps || exercise.defaultTargetReps);
-    setCurrentTab('tracking');
+    setCurrentTab('session');
   };
 
   const handleSessionComplete = (sessionData: Omit<Session, 'id'>) => {
@@ -86,7 +125,7 @@ export function App() {
     setSessions([created, ...sessions]);
     showToast(`Saved session: ${sessionData.exerciseLabel} (${sessionData.formAccuracy}% accuracy)`);
     setActiveExercise(null);
-    setCurrentTab('progress');
+    setCurrentTab('history');
   };
 
   const handleSaveProfile = (updatedUser: User) => {
@@ -135,10 +174,10 @@ export function App() {
     showToast('Clinical advice dispatched to patient');
   };
 
-  const handleUpdateAppointment = (id: number, status: Appointment['status'], adminNote?: string) => {
+  const handleUpdateAppointment = (id: number, status: AppointmentStatus, adminNote?: string) => {
     updateAppointmentStatus(id, status, adminNote);
     setAppointments(getAppointments());
-    showToast(`Appointment status changed to ${status}`);
+    showToast(`Appointment status updated to "${status.toUpperCase()}"`);
   };
 
   const handleAddDoctor = (doc: Omit<Doctor, 'id'>) => {
@@ -147,21 +186,32 @@ export function App() {
     showToast(`Registered specialist: ${doc.name}`);
   };
 
+  // If user is not authenticated into a specific domain, show the 2-Domain Portal Auth screen!
+  if (!authRole) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
+        <PortalAuth onLogin={handleLogin} />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-white text-slate-800 flex flex-col font-sans selection:bg-blue-100 selection:text-blue-900">
+    <div className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col md:flex-row font-sans selection:bg-blue-100 selection:text-blue-900">
       
-      {/* Top App Bar */}
-      <Navbar
+      {/* LEFT SIDEBAR NAVIGATION WITH PROFILE DROPDOWN (Requirement 1 & 2) */}
+      <Sidebar
         currentTab={currentTab}
         onSelectTab={(tab) => {
-          if (tab !== 'tracking') {
+          if (tab !== 'session') {
             setActiveExercise(null);
           }
           setCurrentTab(tab);
         }}
+        userRole={authRole}
         user={user}
-        unreadCount={0}
-        isAdminLoggedIn={isAdminLoggedIn}
+        activeDoctor={doctors[0]}
+        onLogout={handleLogout}
+        onOpenProfileModal={handleOpenProfileModal}
       />
 
       {/* Global Toast Alert */}
@@ -172,97 +222,240 @@ export function App() {
         </div>
       )}
 
+      {/* Account Profile & Settings Modal */}
+      <AccountProfileModal
+        isOpen={profileModalOpen}
+        onClose={() => setProfileModalOpen(false)}
+        userRole={authRole}
+        user={user}
+        activeDoctor={doctors[0]}
+        initialTab={profileModalTab}
+        onSaveProfile={handleSaveProfile}
+        onSwitchPortal={() => {
+          setProfileModalOpen(false);
+          setAuthRole(null);
+        }}
+      />
+
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {currentTab === 'dashboard' && (
-          <DashboardHome
-            user={user}
-            sessions={sessions}
-            appointments={appointments}
-            onStartExercise={handleStartExercise}
-            onNavigate={(tab) => setCurrentTab(tab)}
-          />
-        )}
+      <div className="flex-1 flex flex-col min-w-0">
+        <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+          
+          {/* ================================================================ */}
+          {/* PATIENT PORTAL VIEWS */}
+          {/* ================================================================ */}
+          {authRole === 'patient' && (
+            <>
+              {/* Home Dashboard: Today's rehabilitation only (Requirement 10) */}
+              {currentTab === 'home' && (
+                <DashboardHome
+                  user={user}
+                  sessions={sessions}
+                  appointments={appointments}
+                  onStartExercise={handleStartExercise}
+                  onNavigate={(tab) => {
+                    if (tab === 'telehealth') setCurrentTab('telehealth');
+                    else if (tab === 'reports') setCurrentTab('reports');
+                    else if (tab === 'history') setCurrentTab('history');
+                    else if (tab === 'exercises') setCurrentTab('exercises');
+                    else if (tab === 'progress') setCurrentTab('progress');
+                    else setCurrentTab('home');
+                  }}
+                />
+              )}
 
-        {currentTab === 'exercises' && (
-          <ExerciseSelectionView
-            user={user}
-            onSelectExercise={handleStartExercise}
-          />
-        )}
+              {/* Exercises Directory */}
+              {currentTab === 'exercises' && (
+                <ExerciseSelectionView
+                  user={user}
+                  onSelectExercise={handleStartExercise}
+                />
+              )}
 
-        {currentTab === 'tracking' && (
-          <TrackingView
-            exercise={activeExercise || EXERCISES.squat}
-            targetReps={activeTargetReps}
-            onSessionComplete={handleSessionComplete}
-            onBack={() => {
-              setActiveExercise(null);
-              setCurrentTab('exercises');
-            }}
-          />
-        )}
+              {/* Live Exercise Session */}
+              {currentTab === 'session' && (
+                <TrackingView
+                  exercise={activeExercise || EXERCISES.squat}
+                  targetReps={activeTargetReps}
+                  onSessionComplete={handleSessionComplete}
+                  onBack={() => {
+                    setActiveExercise(null);
+                    setCurrentTab('exercises');
+                  }}
+                />
+              )}
 
-        {currentTab === 'telehealth' && (
-          <TelehealthView
-            user={user}
-            doctors={doctors}
-            appointments={appointments}
-            messages={messages}
-            onBookAppointment={handleBookAppointment}
-            onSendMessage={handleSendMessage}
-          />
-        )}
+              {/* Dedicated Reports View (Requirements 4, 7, 8, 9) */}
+              {currentTab === 'reports' && (
+                <ReportsView
+                  user={user}
+                  sessions={sessions}
+                  appointments={appointments}
+                  doctors={doctors}
+                  onNavigate={(tab) => setCurrentTab(tab)}
+                />
+              )}
 
-        {currentTab === 'diet' && (
-          <DietTrackerView
-            dietEntries={dietEntries}
-            onAddEntry={handleAddDietEntry}
-            onDeleteEntry={handleDeleteDietEntry}
-          />
-        )}
+              {/* Dedicated History View (Requirement 6) */}
+              {currentTab === 'history' && (
+                <HistoryView
+                  user={user}
+                  sessions={sessions}
+                />
+              )}
 
-        {currentTab === 'progress' && (
-          <ProgressAnalyticsView sessions={sessions} />
-        )}
+              {/* Telehealth & Appointments (Requirement 3) */}
+              {(currentTab === 'telehealth' || currentTab === 'appointments') && (
+                <TelehealthView
+                  user={user}
+                  doctors={doctors}
+                  appointments={appointments}
+                  messages={messages}
+                  userRole={authRole}
+                  onBookAppointment={handleBookAppointment}
+                  onSendMessage={handleSendMessage}
+                  onUpdateAppointmentStatus={handleUpdateAppointment}
+                />
+              )}
 
-        {currentTab === 'notes' && (
-          <NotesView
-            notes={notes}
-            onAddNote={handleAddNote}
-            onDeleteNote={handleDeleteNote}
-          />
-        )}
+              {/* Progress Biometrics */}
+              {currentTab === 'progress' && (
+                <ProgressAnalyticsView sessions={sessions} />
+              )}
 
-        {currentTab === 'profile' && (
-          <MedicalProfileView
-            user={user}
-            onSaveProfile={handleSaveProfile}
-          />
-        )}
+              {/* Diet Tracker */}
+              {currentTab === 'diet' && (
+                <DietTrackerView
+                  dietEntries={dietEntries}
+                  onAddEntry={handleAddDietEntry}
+                  onDeleteEntry={handleDeleteDietEntry}
+                />
+              )}
 
-        {currentTab === 'admin' && (
-          <AdminPortalView
-            doctors={doctors}
-            appointments={appointments}
-            messages={messages}
-            guardianAlerts={guardianAlerts}
-            isAdminLoggedIn={isAdminLoggedIn}
-            onAdminLogin={() => setIsAdminLoggedIn(true)}
-            onAdminLogout={() => setIsAdminLoggedIn(false)}
-            onUpdateAppointmentStatus={handleUpdateAppointment}
-            onReplyMessage={handleDoctorReply}
-            onAddDoctor={handleAddDoctor}
-          />
-        )}
-      </main>
+              {/* Notes Journal */}
+              {currentTab === 'notes' && (
+                <NotesView
+                  notes={notes}
+                  onAddNote={handleAddNote}
+                  onDeleteNote={handleDeleteNote}
+                />
+              )}
 
-      {/* Footer */}
-      <footer className="border-t border-slate-200 bg-slate-50/80 py-4 text-center text-xs text-slate-500">
-        <p>PhysioAI • Real-Time AI Rehabilitation & Postural Kinematics • Clinical Physical Therapy Suite</p>
-      </footer>
+              {/* Safety & SOS Section */}
+              {currentTab === 'safety' && (
+                <DashboardHome
+                  user={user}
+                  sessions={sessions}
+                  appointments={appointments}
+                  onStartExercise={handleStartExercise}
+                  onNavigate={(tab) => setCurrentTab(tab as AppNavTab)}
+                />
+              )}
+            </>
+          )}
+
+          {/* ================================================================ */}
+          {/* DOCTOR / PHYSIOTHERAPIST PORTAL VIEWS */}
+          {/* ================================================================ */}
+          {authRole === 'doctor' && (
+            <>
+              {/* Doctor Dashboard (Requirement 3 & 12) */}
+              {currentTab === 'doctor_dashboard' && (
+                <DoctorDashboard
+                  user={user}
+                  doctors={doctors}
+                  appointments={appointments}
+                  sessions={sessions}
+                  onNavigate={(tab) => {
+                    if (tab === 'telehealth') setCurrentTab('telehealth');
+                    else if (tab === 'reports') setCurrentTab('doctor_reports');
+                    else setCurrentTab(tab as AppNavTab);
+                  }}
+                  onUpdateAppointmentStatus={handleUpdateAppointment}
+                />
+              )}
+
+              {/* Patient Roster */}
+              {currentTab === 'doctor_patients' && (
+                <DoctorDashboard
+                  user={user}
+                  doctors={doctors}
+                  appointments={appointments}
+                  sessions={sessions}
+                  onNavigate={(tab) => setCurrentTab(tab as AppNavTab)}
+                  onUpdateAppointmentStatus={handleUpdateAppointment}
+                />
+              )}
+
+              {/* Patient Reports for Clinician */}
+              {currentTab === 'doctor_reports' && (
+                <ReportsView
+                  user={user}
+                  sessions={sessions}
+                  appointments={appointments}
+                  doctors={doctors}
+                  onNavigate={(tab) => setCurrentTab(tab)}
+                />
+              )}
+
+              {/* Patient Progress */}
+              {currentTab === 'doctor_progress' && (
+                <ProgressAnalyticsView sessions={sessions} />
+              )}
+
+              {/* Alerts & SOS */}
+              {currentTab === 'doctor_alerts' && (
+                <AdminPortalView
+                  doctors={doctors}
+                  appointments={appointments}
+                  messages={messages}
+                  guardianAlerts={guardianAlerts}
+                  isAdminLoggedIn={true}
+                  onAdminLogin={() => setIsAdminLoggedIn(true)}
+                  onAdminLogout={handleLogout}
+                  onUpdateAppointmentStatus={handleUpdateAppointment}
+                  onReplyMessage={handleDoctorReply}
+                  onAddDoctor={handleAddDoctor}
+                />
+              )}
+
+              {/* Doctor Telehealth & Appointments */}
+              {(currentTab === 'telehealth' || currentTab === 'doctor_appointments' || currentTab === 'doctor_messages') && (
+                <TelehealthView
+                  user={user}
+                  doctors={doctors}
+                  appointments={appointments}
+                  messages={messages}
+                  userRole={authRole}
+                  onBookAppointment={handleBookAppointment}
+                  onSendMessage={handleSendMessage}
+                  onUpdateAppointmentStatus={handleUpdateAppointment}
+                />
+              )}
+            </>
+          )}
+
+        </main>
+
+        {/* Clean Footer */}
+        <footer className="border-t border-slate-200 bg-white py-3.5 px-4 sm:px-8 text-center text-xs text-slate-500">
+          <p className="flex flex-wrap items-center justify-center gap-2">
+            <span>PhysioAI Clinical Physical Therapy Suite</span>
+            <span>•</span>
+            <span>Client-Side Kinematic Angle Verification</span>
+            <span>•</span>
+            <button
+              onClick={() => handleOpenProfileModal('settings')}
+              className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
+            >
+              Switch Role ({authRole.toUpperCase()})
+            </button>
+          </p>
+        </footer>
+      </div>
 
     </div>
   );
 }
+
 export default App;

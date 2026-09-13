@@ -115,10 +115,70 @@ export interface Doctor {
   contact: string;
   whatsapp: string;
   email: string;
+  hospital?: string;
+  rating?: number;
+  bio?: string;
+  availableSlots?: string[];
   avatarUrl?: string;
 }
 
-export type AppointmentStatus = 'pending' | 'approved' | 'completed' | 'cancelled';
+export type UserRole = 'patient' | 'doctor';
+
+export type AppointmentStatus = 
+  | 'scheduled'
+  | 'confirmed'
+  | 'ready'
+  | 'completed'
+  | 'cancelled'
+  | 'pending'
+  | 'approved';
+
+export interface MonthlyReport {
+  id: string;
+  monthKey: string; // e.g. "2026-09"
+  monthName: string; // e.g. "September 2026"
+  generatedDate: string;
+  patientId: number;
+  patientName: string;
+  patientEmail: string;
+  assignedDoctorName?: string;
+  assignedDoctorEmail?: string;
+  hasUpcomingCheckup: boolean;
+  totalSessions: number;
+  totalReps: number;
+  completedExercises: number;
+  missedSessions: number;
+  avgAccuracy: number;
+  avgScore: number;
+  adherencePercent: number;
+  exerciseBreakdown: {
+    exerciseLabel: string;
+    sessions: number;
+    reps: number;
+    avgAccuracy: number;
+  }[];
+  progressTrend: string;
+  safetyEventsCount: number;
+  warningsCount: number;
+  emailStatus: 'Sent' | 'Pending' | 'Draft';
+  emailSentDate?: string;
+  recipients: string[];
+}
+
+export interface DailyHistoryEntry {
+  date: string; // YYYY-MM-DD
+  displayDate: string;
+  sessionsCount: number;
+  totalReps: number;
+  correctReps: number;
+  incorrectReps: number;
+  avgFormScore: number;
+  totalDurationSec: number;
+  exercises: string[];
+  warningsCount: number;
+  safetyEventsCount: number;
+  sessions: Session[];
+}
 
 export interface Appointment {
   id: number;
