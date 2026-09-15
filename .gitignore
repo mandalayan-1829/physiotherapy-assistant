@@ -1,3 +1,15 @@
+# Node / frontend
+node_modules/
+dist/
+
+# Local databases created by the new backend
+backend/physioai.db
+*.sqlite3
+
+# Environment files
+.env
+.env.local
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

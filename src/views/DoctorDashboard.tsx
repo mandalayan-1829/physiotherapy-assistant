@@ -20,13 +20,23 @@ import {
   Video 
 } from 'lucide-react';
 import { Appointment, AppointmentStatus, Doctor, MonthlyReport, Session, User } from '../types';
-import { getHistoricalDailyEntries, getMonthlyReports, getTodaySessions } from '../utils/storage';
+import { getHistoricalDailyEntries, getMonthlyReports } from '../utils/storage';
+
+export interface DoctorPatientSummary {
+  account_id: number;
+  name: string;
+  email: string;
+  current_problem: string;
+  pain_intensity: number;
+}
 
 interface DoctorDashboardProps {
   user: User;
   doctors: Doctor[];
   appointments: Appointment[];
   sessions: Session[];
+  /** Patients linked to this clinician on the server. */
+  patients?: DoctorPatientSummary[];
   onNavigate: (tab: any) => void;
   onUpdateAppointmentStatus: (id: number, status: AppointmentStatus, note?: string) => void;
 }
@@ -36,6 +46,7 @@ export function DoctorDashboard({
   doctors,
   appointments,
   sessions,
+  patients: linkedPatients = [],
   onNavigate,
   onUpdateAppointmentStatus,
 }: DoctorDashboardProps) {
@@ -43,50 +54,58 @@ export function DoctorDashboard({
   const [searchPatient, setSearchPatient] = useState<string>('');
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
-  // Active doctor profile (Dr. Aarav Patel or first doctor)
+  // Active doctor profile (the signed-in clinician, or the first in the directory)
   const currentDoctor = doctors[0] || {
-    id: 1,
-    name: 'Dr. Aarav Patel',
-    specialization: 'Orthopedic Physiotherapy',
-    hospital: 'Apollo Physical Therapy Center',
+    id: 0,
+    name: 'Clinician',
+    specialization: 'Not recorded',
+    qualification: '',
+    experience: 0,
+    availableDays: '',
+    timings: '',
+    about: '',
+    contact: '',
+    whatsapp: '',
+    email: '',
+    hospital: '',
   };
 
   const monthlyReports = getMonthlyReports();
-  const todaySessions = getTodaySessions(sessions);
 
-  // Patient roster simulated from user + sessions
-  const patients = [
-    {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      condition: user.currentProblem || 'Knee Osteoarthritis Rehabilitation',
-      painScore: user.painIntensity,
-      adherence: 88,
-      lastSession: todaySessions.length > 0 ? 'Today' : 'Yesterday',
-      status: 'Active Protocol',
-    },
-    {
-      id: 'patient-2',
-      name: 'Sarah Jenkins',
-      email: 'sarah.j@example.com',
-      condition: 'Post-ACL Reconstruction (Week 6)',
-      painScore: 3,
-      adherence: 94,
-      lastSession: 'Today',
-      status: 'Improving',
-    },
-    {
-      id: 'patient-3',
-      name: 'David Kumar',
-      email: 'david.k@example.com',
-      condition: 'Cervical Spondylosis & Posture',
-      painScore: 5,
-      adherence: 72,
-      lastSession: '2 days ago',
-      status: 'Review Required',
-    },
-  ];
+  // Roster derived from the patients actually linked to this clinician.
+  // No simulated patient rows are generated.
+  const todayStr = new Date().toISOString().split('T')[0];
+  const patients = linkedPatients.map((patient) => {
+    const patientSessions = sessions.filter((s) => s.userId === patient.account_id);
+    const activeDays = new Set(patientSessions.map((s) => s.date.split(' ')[0]));
+    const adherence = Math.min(100, Math.round((activeDays.size / 7) * 100));
+    const latest = patientSessions
+      .map((s) => s.date)
+      .sort((a, b) => b.localeCompare(a))[0];
+
+    let lastSession = 'No sessions recorded';
+    if (latest) {
+      if (latest.startsWith(todayStr)) lastSession = 'Today';
+      else if (activeDays.has(todayStr)) lastSession = 'Today';
+      else lastSession = latest.split(' ')[0];
+    }
+
+    return {
+      id: patient.account_id,
+      name: patient.name,
+      email: patient.email,
+      condition: patient.current_problem || 'Not recorded',
+      painScore: patient.pain_intensity,
+      adherence,
+      lastSession,
+      status: patient.pain_intensity >= 5 ? 'Review Required' : adherence > 0 ? 'Active Protocol' : 'New Patient',
+    };
+  });
+
+  const overallFormAverage =
+    sessions.length > 0
+      ? Math.round(sessions.reduce((acc, s) => acc + s.formAccuracy, 0) / sessions.length)
+      : 0;
 
   const filteredAppointments = appointments.filter((appt) => {
     const matchesStatus = selectedStatusFilter === 'all' || appt.status === selectedStatusFilter;
@@ -173,8 +192,10 @@ export function DoctorDashboard({
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <span className="text-[11px] font-mono uppercase text-slate-500 block">Kinematic Form Avg</span>
-          <span className="text-2xl font-bold font-mono text-emerald-600 mt-1 block">91%</span>
-          <span className="text-xs text-slate-500 mt-0.5 block">Across patient routines</span>
+          <span className="text-2xl font-bold font-mono text-emerald-600 mt-1 block">
+            {sessions.length > 0 ? `${overallFormAverage}%` : '—'}
+          </span>
+          <span className="text-xs text-slate-500 mt-0.5 block">Across recorded patient sessions</span>
         </div>
       </div>
 

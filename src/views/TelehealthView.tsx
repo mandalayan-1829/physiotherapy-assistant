@@ -34,8 +34,13 @@ interface TelehealthViewProps {
   appointments: Appointment[];
   messages: Message[];
   userRole?: UserRole;
-  onBookAppointment: (appointment: Omit<Appointment, 'id' | 'createdAt'>) => void;
-  onSendMessage: (doctorId: number, message: string) => void;
+  onBookAppointment: (input: {
+    doctorId: number;
+    date: string;
+    time: string;
+    reason: string;
+  }) => void | Promise<void>;
+  onSendMessage: (doctorId: number, message: string) => void | Promise<void>;
   onUpdateAppointmentStatus?: (id: number, status: AppointmentStatus, note?: string) => void;
 }
 
@@ -91,21 +96,19 @@ export function TelehealthView({
     setChatInput('');
   };
 
-  const handleCreateBooking = (e: React.FormEvent) => {
+  const handleCreateBooking = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!bookingDoctor || !bookingDate) return;
 
-    onBookAppointment({
-      userId: user.id,
+    // The booking is persisted by the backend; the confirmation only shows
+    // once the server has accepted it.
+    await onBookAppointment({
       doctorId: bookingDoctor.id,
-      doctorName: bookingDoctor.name,
-      specialization: bookingDoctor.specialization,
-      patientName: user.name,
-      email: user.email,
       date: bookingDate,
       time: bookingTime,
-      reason: bookingReason || `Physical assessment & review for ${user.currentProblem}`,
-      status: 'scheduled',
+      reason:
+        bookingReason ||
+        `Physical assessment & review${user.currentProblem ? ` for ${user.currentProblem}` : ''}`,
     });
 
     setBookingSuccess(true);

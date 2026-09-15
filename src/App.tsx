@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Sidebar, AppNavTab, PatientNavTab, DoctorNavTab } from './components/Sidebar';
+import { useCallback, useEffect, useState } from 'react';
+import { Sidebar, AppNavTab } from './components/Sidebar';
 import { PortalAuth } from './components/PortalAuth';
 import { AccountProfileModal } from './components/AccountProfileModal';
 import { DashboardHome } from './views/DashboardHome';
@@ -12,100 +12,225 @@ import { HistoryView } from './views/HistoryView';
 import { DietTrackerView } from './views/DietTrackerView';
 import { ProgressAnalyticsView } from './views/ProgressAnalyticsView';
 import { NotesView } from './views/NotesView';
-import { MedicalProfileView } from './views/MedicalProfileView';
-import { AdminPortalView } from './views/AdminPortalView';
+import { NotImplementedView } from './views/NotImplementedView';
 
-import { 
-  Appointment, 
-  AppointmentStatus, 
-  DietEntry, 
-  Doctor, 
-  Exercise, 
-  GuardianAlert, 
-  Message, 
-  Note, 
-  Session, 
-  User, 
-  UserRole 
+import {
+  Appointment,
+  AppointmentStatus,
+  DietEntry,
+  Doctor,
+  Exercise,
+  GuardianAlert,
+  Message,
+  Note,
+  Session,
+  User,
+  UserRole,
 } from './types';
-import { 
-  addDietEntry, 
-  addDoctor, 
-  addNote, 
-  addSession, 
-  bookAppointment, 
-  clearStoredAuthRole, 
-  deleteDietEntry, 
-  deleteNote, 
-  getAppointments, 
-  getDietEntries, 
-  getDoctors, 
-  getGuardianAlerts, 
-  getMessages, 
-  getNotes, 
-  getSessions, 
-  getStoredAuthRole, 
-  getUserProfile, 
-  initializeStorage, 
-  saveUserProfile, 
-  sendMessage, 
-  setStoredAuthRole, 
-  updateAppointmentStatus 
-} from './utils/storage';
 import { EXERCISES } from './data/exercises';
+import { ApiError } from './services/api';
+import type { AuthSession } from './services/auth';
+import { fetchCurrentSession, logout as apiLogout, saveProfile } from './services/auth';
+import { doctorToView, profileToUser, userToProfilePayload } from './services/mappers';
+import {
+  addDiet,
+  addPatientNote,
+  bookAppointment,
+  createSession,
+  deleteDiet,
+  deleteNote,
+  listAppointments,
+  listDiet,
+  listDoctors,
+  listMessages,
+  listNotes,
+  listPatients,
+  listSessions,
+  sendMessage,
+  updateAppointment as apiUpdateAppointment,
+  type PatientSummary,
+} from './services/physio';
+
+/** Build a view-model `User` for a doctor account (no medical profile). */
+function doctorAccountToUser(session: AuthSession): User {
+  return {
+    id: session.account.id,
+    name: session.account.full_name,
+    email: session.account.email,
+    age: 0,
+    gender: '',
+    bloodGroup: '',
+    heightCm: 0,
+    weightKg: 0,
+    currentProblem: '',
+    medicalConditions: '',
+    painLocation: '',
+    painIntensity: 0,
+    painType: '',
+    currentMedications: '',
+    movementRestrictions: '',
+    rehabGoals: '',
+    exerciseLimitations: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
+    guardianWhatsapp: '',
+    doctorName: '',
+    createdAt: '',
+  };
+}
 
 export function App() {
-  // Authentication Role: 'patient' | 'doctor' | null (if null, show dual PortalAuth screen)
-  const [authRole, setAuthRole] = useState<UserRole | null>(() => {
-    // If not set yet, defaults to 'patient' for immediate preview, but user can click switch domain anytime
-    return getStoredAuthRole() || 'patient';
-  });
+  // --- Authentication ------------------------------------------------------
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState<boolean>(true);
 
+  const authRole: UserRole | null = session?.role ?? null;
+
+  // --- UI state ------------------------------------------------------------
   const [currentTab, setCurrentTab] = useState<AppNavTab>('home');
-  
-  // Profile modal state
   const [profileModalOpen, setProfileModalOpen] = useState<boolean>(false);
   const [profileModalTab, setProfileModalTab] = useState<'general' | 'medical' | 'settings'>('general');
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
 
-  // Active workout state
+  // --- Active workout ------------------------------------------------------
   const [activeExercise, setActiveExercise] = useState<Exercise | null>(null);
   const [activeTargetReps, setActiveTargetReps] = useState<number>(10);
 
-  // App data state
-  const [user, setUser] = useState<User>(getUserProfile);
-  const [sessions, setSessions] = useState<Session[]>(getSessions);
-  const [dietEntries, setDietEntries] = useState<DietEntry[]>(getDietEntries);
-  const [notes, setNotes] = useState<Note[]>(getNotes);
-  const [doctors, setDoctors] = useState<Doctor[]>(getDoctors);
-  const [appointments, setAppointments] = useState<Appointment[]>(getAppointments);
-  const [messages, setMessages] = useState<Message[]>(getMessages);
-  const [guardianAlerts, setGuardianAlerts] = useState<GuardianAlert[]>(getGuardianAlerts);
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
+  // --- Application data (all loaded from the backend) ----------------------
+  const [user, setUser] = useState<User | null>(null);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [dietEntries, setDietEntries] = useState<DietEntry[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [guardianAlerts, setGuardianAlerts] = useState<GuardianAlert[]>([]);
+  const [patients, setPatients] = useState<PatientSummary[]>([]);
 
-  // Notification toast
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    initializeStorage();
+  const showToast = useCallback((message: string) => {
+    setToastMessage(message);
+    setTimeout(() => setToastMessage(null), 3500);
   }, []);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3500);
+  const reportError = useCallback(
+    (error: unknown, fallback: string) => {
+      if (error instanceof ApiError) {
+        showToast(error.message);
+      } else {
+        showToast(fallback);
+      }
+    },
+    [showToast],
+  );
+
+  // --- Session restore -----------------------------------------------------
+  // Identity always comes from the backend; nothing about the user is assumed
+  // from browser storage.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const restored = await fetchCurrentSession();
+        if (!cancelled) setSession(restored);
+      } catch {
+        if (!cancelled) setSession(null);
+      } finally {
+        if (!cancelled) setIsRestoringSession(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // --- Data loading --------------------------------------------------------
+  useEffect(() => {
+    if (!session) {
+      setUser(null);
+      setSessions([]);
+      setDietEntries([]);
+      setNotes([]);
+      setDoctors([]);
+      setAppointments([]);
+      setMessages([]);
+      setGuardianAlerts([]);
+      setPatients([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      setIsLoadingData(true);
+      try {
+        if (session.role === 'patient') {
+          setUser(profileToUser(session.account, session.profile));
+          const [loadedSessions, loadedDiet, loadedNotes, loadedDoctors, loadedAppointments, loadedMessages] =
+            await Promise.all([
+              listSessions(),
+              listDiet(),
+              listNotes(),
+              listDoctors(),
+              listAppointments(),
+              listMessages(),
+            ]);
+          if (cancelled) return;
+          setSessions(loadedSessions);
+          setDietEntries(loadedDiet);
+          setNotes(loadedNotes);
+          setDoctors(loadedDoctors);
+          setAppointments(loadedAppointments);
+          setMessages(loadedMessages);
+        } else {
+          setUser(doctorAccountToUser(session));
+          const [loadedAppointments, roster, directory] = await Promise.all([
+            listAppointments(),
+            listPatients(),
+            listDoctors(),
+          ]);
+          if (cancelled) return;
+          setAppointments(loadedAppointments);
+          setPatients(roster);
+          setDoctors(directory);
+
+          const [sessionLists, messageLists] = await Promise.all([
+            Promise.all(roster.map((patient) => listSessions(patient.account_id))),
+            Promise.all(roster.map((patient) => listMessages(patient.account_id))),
+          ]);
+          if (cancelled) return;
+          setSessions(sessionLists.flat());
+          setMessages(messageLists.flat());
+        }
+      } catch (error) {
+        if (!cancelled) reportError(error, 'Could not load your data from the server.');
+      } finally {
+        if (!cancelled) setIsLoadingData(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session, reportError]);
+
+  // --- Auth handlers -------------------------------------------------------
+  const handleAuthenticated = (authenticated: AuthSession) => {
+    setSession(authenticated);
+    setCurrentTab(authenticated.role === 'patient' ? 'home' : 'doctor_dashboard');
+    showToast(
+      authenticated.role === 'patient'
+        ? `Signed in as ${authenticated.account.full_name}`
+        : `Signed in to the Clinical Console as ${authenticated.account.full_name}`,
+    );
   };
 
-  // Auth Handlers
-  const handleLogin = (role: UserRole) => {
-    setStoredAuthRole(role);
-    setAuthRole(role);
-    setCurrentTab(role === 'patient' ? 'home' : 'doctor_dashboard');
-    showToast(`Signed into ${role === 'patient' ? 'Patient Portal' : 'Doctor / Clinician Console'}`);
-  };
-
-  const handleLogout = () => {
-    clearStoredAuthRole();
-    setAuthRole(null);
-    showToast('Logged out. Select a portal domain to continue.');
+  const handleLogout = async () => {
+    await apiLogout();
+    setSession(null);
+    setActiveExercise(null);
+    setCurrentTab('home');
+    showToast('Signed out. Select a portal domain to continue.');
   };
 
   const handleOpenProfileModal = (tab: 'general' | 'medical' | 'settings' = 'general') => {
@@ -113,92 +238,185 @@ export function App() {
     setProfileModalOpen(true);
   };
 
-  // Exercise tracking handlers
+  // --- Exercise tracking ---------------------------------------------------
   const handleStartExercise = (exercise: Exercise, targetReps: number = 10) => {
     setActiveExercise(exercise);
     setActiveTargetReps(targetReps || exercise.defaultTargetReps);
     setCurrentTab('session');
   };
 
-  const handleSessionComplete = (sessionData: Omit<Session, 'id'>) => {
-    const created = addSession(sessionData);
-    setSessions([created, ...sessions]);
-    showToast(`Saved session: ${sessionData.exerciseLabel} (${sessionData.formAccuracy}% accuracy)`);
-    setActiveExercise(null);
-    setCurrentTab('history');
+  const handleSessionComplete = async (sessionData: Omit<Session, 'id'>) => {
+    try {
+      const created = await createSession({
+        exercise: sessionData.exercise,
+        exerciseLabel: sessionData.exerciseLabel,
+        reps: sessionData.reps,
+        targetReps: sessionData.targetReps,
+        formAccuracy: sessionData.formAccuracy,
+        durationSec: sessionData.durationSec,
+        notes: sessionData.notes,
+      });
+      setSessions((previous) => [created, ...previous]);
+      showToast(`Saved session: ${created.exerciseLabel} (${created.formAccuracy}% accuracy)`);
+      setActiveExercise(null);
+      setCurrentTab('history');
+    } catch (error) {
+      reportError(error, 'Could not save this session to the server.');
+    }
   };
 
-  const handleSaveProfile = (updatedUser: User) => {
-    saveUserProfile(updatedUser);
-    setUser(updatedUser);
-    showToast('Medical profile updated successfully');
+  // --- Profile -------------------------------------------------------------
+  const handleSaveProfile = async (updatedUser: User) => {
+    try {
+      const saved = await saveProfile(userToProfilePayload(updatedUser));
+      setUser((previous) =>
+        previous ? profileToUser(session!.account, saved) : previous,
+      );
+      showToast('Medical profile updated successfully');
+    } catch (error) {
+      reportError(error, 'Could not save your medical profile.');
+    }
   };
 
-  const handleAddDietEntry = (entry: Omit<DietEntry, 'id'>) => {
-    const created = addDietEntry(entry);
-    setDietEntries([created, ...dietEntries]);
-    showToast(`Logged meal: ${entry.meal}`);
+  // --- Diet ----------------------------------------------------------------
+  const handleAddDietEntry = async (entry: Omit<DietEntry, 'id' | 'userId'>) => {
+    try {
+      const created = await addDiet({
+        meal: entry.meal,
+        calories: entry.calories,
+        protein: entry.protein,
+        carbs: entry.carbs,
+        fats: entry.fats,
+      });
+      setDietEntries((previous) => [created, ...previous]);
+      showToast(`Logged meal: ${created.meal}`);
+    } catch (error) {
+      reportError(error, 'Could not save this meal.');
+    }
   };
 
-  const handleDeleteDietEntry = (id: number) => {
-    deleteDietEntry(id);
-    setDietEntries(dietEntries.filter((e) => e.id !== id));
+  const handleDeleteDietEntry = async (id: number) => {
+    try {
+      await deleteDiet(id);
+      setDietEntries((previous) => previous.filter((entry) => entry.id !== id));
+    } catch (error) {
+      reportError(error, 'Could not delete this meal.');
+    }
   };
 
-  const handleAddNote = (text: string, category: Note['category']) => {
-    const created = addNote(text, category);
-    setNotes([created, ...notes]);
-    showToast('Clinical journal note saved');
+  // --- Notes ---------------------------------------------------------------
+  const handleAddNote = async (text: string, category: Note['category']) => {
+    if (!session) return;
+    try {
+      const created = await addPatientNote(session.account.id, text, category);
+      setNotes((previous) => [created, ...previous]);
+      showToast('Journal note saved');
+    } catch (error) {
+      reportError(error, 'Could not save this note.');
+    }
   };
 
-  const handleDeleteNote = (id: number) => {
-    deleteNote(id);
-    setNotes(notes.filter((n) => n.id !== id));
+  const handleDeleteNote = async (id: number) => {
+    try {
+      await deleteNote(id);
+      setNotes((previous) => previous.filter((note) => note.id !== id));
+    } catch (error) {
+      reportError(error, 'Could not delete this note.');
+    }
   };
 
-  const handleBookAppointment = (data: Omit<Appointment, 'id' | 'createdAt' | 'status'>) => {
-    const created = bookAppointment(data);
-    setAppointments([created, ...appointments]);
-    showToast(`Appointment requested with ${data.doctorName}`);
+  // --- Appointments --------------------------------------------------------
+  const handleBookAppointment = async (data: {
+    doctorId: number;
+    date: string;
+    time: string;
+    reason: string;
+  }) => {
+    try {
+      const created = await bookAppointment({
+        doctorProfileId: data.doctorId,
+        date: data.date,
+        time: data.time,
+        reason: data.reason,
+      });
+      setAppointments((previous) => [created, ...previous]);
+      showToast(`Appointment requested with ${created.doctorName}`);
+    } catch (error) {
+      reportError(error, 'Could not book this appointment.');
+    }
   };
 
-  const handleSendMessage = (doctorId: number, text: string) => {
-    const created = sendMessage(doctorId, 'user', text);
-    setMessages([...messages, created]);
-    showToast('Message sent to physician');
+  const handleUpdateAppointment = async (
+    id: number,
+    status: AppointmentStatus,
+    clinicianNote?: string,
+  ) => {
+    try {
+      const updated = await apiUpdateAppointment(id, {
+        status,
+        ...(clinicianNote !== undefined ? { clinician_note: clinicianNote } : {}),
+      });
+      setAppointments((previous) =>
+        previous.map((appointment) => (appointment.id === id ? updated : appointment)),
+      );
+      showToast(`Appointment status updated to "${status.toUpperCase()}"`);
+    } catch (error) {
+      reportError(error, 'Could not update this appointment.');
+    }
   };
 
-  const handleDoctorReply = (doctorId: number, text: string) => {
-    const created = sendMessage(doctorId, 'doctor', text);
-    setMessages([...messages, created]);
-    showToast('Clinical advice dispatched to patient');
+  // --- Messages ------------------------------------------------------------
+  const handleSendMessage = async (doctorId: number, text: string) => {
+    if (!session) return;
+    if (session.role !== 'patient') {
+      // Clinician replies need a selected patient context, which the console
+      // does not provide yet.
+      showToast('Sending a clinician reply requires selecting a patient (not implemented yet).');
+      return;
+    }
+    try {
+      const created = await sendMessage({
+        doctorProfileId: doctorId,
+        message: text,
+        sender: 'user',
+      });
+      setMessages((previous) => [...previous, created]);
+      showToast('Message sent to your clinician');
+    } catch (error) {
+      reportError(error, 'Could not send this message.');
+    }
   };
 
-  const handleUpdateAppointment = (id: number, status: AppointmentStatus, adminNote?: string) => {
-    updateAppointmentStatus(id, status, adminNote);
-    setAppointments(getAppointments());
-    showToast(`Appointment status updated to "${status.toUpperCase()}"`);
-  };
+  // --- Render --------------------------------------------------------------
 
-  const handleAddDoctor = (doc: Omit<Doctor, 'id'>) => {
-    const created = addDoctor(doc);
-    setDoctors([...doctors, created]);
-    showToast(`Registered specialist: ${doc.name}`);
-  };
-
-  // If user is not authenticated into a specific domain, show the 2-Domain Portal Auth screen!
-  if (!authRole) {
+  if (isRestoringSession) {
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
-        <PortalAuth onLogin={handleLogin} />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="text-center space-y-2">
+          <div className="w-10 h-10 mx-auto rounded-lg bg-blue-600 animate-pulse" />
+          <p className="text-sm text-slate-600">Restoring your session…</p>
+        </div>
       </div>
     );
   }
 
+  // Anyone who is not authenticated only ever sees the portal chooser.
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
+        <PortalAuth onAuthenticated={handleAuthenticated} />
+      </div>
+    );
+  }
+
+  const activeDoctor = session.role === 'doctor' && session.doctorProfile
+    ? doctorToView(session.doctorProfile)
+    : doctors[0];
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-slate-800 flex flex-col md:flex-row font-sans selection:bg-blue-100 selection:text-blue-900">
-      
-      {/* LEFT SIDEBAR NAVIGATION WITH PROFILE DROPDOWN (Requirement 1 & 2) */}
+
+      {/* LEFT SIDEBAR NAVIGATION WITH PROFILE DROPDOWN */}
       <Sidebar
         currentTab={currentTab}
         onSelectTab={(tab) => {
@@ -207,46 +425,54 @@ export function App() {
           }
           setCurrentTab(tab);
         }}
-        userRole={authRole}
-        user={user}
-        activeDoctor={doctors[0]}
+        userRole={session.role}
+        user={user ?? doctorAccountToUser(session)}
+        activeDoctor={activeDoctor}
         onLogout={handleLogout}
         onOpenProfileModal={handleOpenProfileModal}
       />
 
       {/* Global Toast Alert */}
       {toastMessage && (
-        <div className="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-xl flex items-center gap-2 border border-slate-800 animate-in slide-in-from-bottom-2 fade-in">
+        <div className="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-xl flex items-center gap-2 border border-slate-800">
           <span className="w-2 h-2 rounded-full bg-emerald-400" />
           <span>{toastMessage}</span>
         </div>
       )}
 
       {/* Account Profile & Settings Modal */}
-      <AccountProfileModal
-        isOpen={profileModalOpen}
-        onClose={() => setProfileModalOpen(false)}
-        userRole={authRole}
-        user={user}
-        activeDoctor={doctors[0]}
-        initialTab={profileModalTab}
-        onSaveProfile={handleSaveProfile}
-        onSwitchPortal={() => {
-          setProfileModalOpen(false);
-          setAuthRole(null);
-        }}
-      />
+      {user && (
+        <AccountProfileModal
+          isOpen={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          userRole={session.role}
+          user={user}
+          activeDoctor={activeDoctor}
+          initialTab={profileModalTab}
+          onSaveProfile={handleSaveProfile}
+          onSwitchPortal={() => {
+            setProfileModalOpen(false);
+            void handleLogout();
+          }}
+        />
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-          
+
+          {isLoadingData && (
+            <div className="mb-4 p-2.5 rounded-lg bg-slate-100 border border-slate-200 text-xs text-slate-600 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+              <span>Syncing with the PhysioAI server…</span>
+            </div>
+          )}
+
           {/* ================================================================ */}
           {/* PATIENT PORTAL VIEWS */}
           {/* ================================================================ */}
-          {authRole === 'patient' && (
+          {session.role === 'patient' && user && (
             <>
-              {/* Home Dashboard: Today's rehabilitation only (Requirement 10) */}
               {currentTab === 'home' && (
                 <DashboardHome
                   user={user}
@@ -264,15 +490,10 @@ export function App() {
                 />
               )}
 
-              {/* Exercises Directory */}
               {currentTab === 'exercises' && (
-                <ExerciseSelectionView
-                  user={user}
-                  onSelectExercise={handleStartExercise}
-                />
+                <ExerciseSelectionView user={user} onSelectExercise={handleStartExercise} />
               )}
 
-              {/* Live Exercise Session */}
               {currentTab === 'session' && (
                 <TrackingView
                   exercise={activeExercise || EXERCISES.squat}
@@ -285,7 +506,6 @@ export function App() {
                 />
               )}
 
-              {/* Dedicated Reports View (Requirements 4, 7, 8, 9) */}
               {currentTab === 'reports' && (
                 <ReportsView
                   user={user}
@@ -296,34 +516,23 @@ export function App() {
                 />
               )}
 
-              {/* Dedicated History View (Requirement 6) */}
-              {currentTab === 'history' && (
-                <HistoryView
-                  user={user}
-                  sessions={sessions}
-                />
-              )}
+              {currentTab === 'history' && <HistoryView user={user} sessions={sessions} />}
 
-              {/* Telehealth & Appointments (Requirement 3) */}
               {(currentTab === 'telehealth' || currentTab === 'appointments') && (
                 <TelehealthView
                   user={user}
                   doctors={doctors}
                   appointments={appointments}
                   messages={messages}
-                  userRole={authRole}
+                  userRole={session.role}
                   onBookAppointment={handleBookAppointment}
                   onSendMessage={handleSendMessage}
                   onUpdateAppointmentStatus={handleUpdateAppointment}
                 />
               )}
 
-              {/* Progress Biometrics */}
-              {currentTab === 'progress' && (
-                <ProgressAnalyticsView sessions={sessions} />
-              )}
+              {currentTab === 'progress' && <ProgressAnalyticsView sessions={sessions} />}
 
-              {/* Diet Tracker */}
               {currentTab === 'diet' && (
                 <DietTrackerView
                   dietEntries={dietEntries}
@@ -332,23 +541,19 @@ export function App() {
                 />
               )}
 
-              {/* Notes Journal */}
               {currentTab === 'notes' && (
-                <NotesView
-                  notes={notes}
-                  onAddNote={handleAddNote}
-                  onDeleteNote={handleDeleteNote}
-                />
+                <NotesView notes={notes} onAddNote={handleAddNote} onDeleteNote={handleDeleteNote} />
               )}
 
-              {/* Safety & SOS Section */}
               {currentTab === 'safety' && (
-                <DashboardHome
-                  user={user}
-                  sessions={sessions}
-                  appointments={appointments}
-                  onStartExercise={handleStartExercise}
-                  onNavigate={(tab) => setCurrentTab(tab as AppNavTab)}
+                <NotImplementedView
+                  title="Safety & SOS"
+                  description="Emergency alerting is stored on the server but the patient-facing safety console has not been connected yet."
+                  pending={[
+                    'Guardian alert history from GET /alerts',
+                    'Server-side dispatch (currently a client-side WhatsApp link)',
+                    'Missed-routine and pain-spike automation',
+                  ]}
                 />
               )}
             </>
@@ -357,15 +562,15 @@ export function App() {
           {/* ================================================================ */}
           {/* DOCTOR / PHYSIOTHERAPIST PORTAL VIEWS */}
           {/* ================================================================ */}
-          {authRole === 'doctor' && (
+          {session.role === 'doctor' && user && (
             <>
-              {/* Doctor Dashboard (Requirement 3 & 12) */}
               {currentTab === 'doctor_dashboard' && (
                 <DoctorDashboard
                   user={user}
                   doctors={doctors}
                   appointments={appointments}
                   sessions={sessions}
+                  patients={patients}
                   onNavigate={(tab) => {
                     if (tab === 'telehealth') setCurrentTab('telehealth');
                     else if (tab === 'reports') setCurrentTab('doctor_reports');
@@ -375,19 +580,18 @@ export function App() {
                 />
               )}
 
-              {/* Patient Roster */}
               {currentTab === 'doctor_patients' && (
                 <DoctorDashboard
                   user={user}
                   doctors={doctors}
                   appointments={appointments}
                   sessions={sessions}
+                  patients={patients}
                   onNavigate={(tab) => setCurrentTab(tab as AppNavTab)}
                   onUpdateAppointmentStatus={handleUpdateAppointment}
                 />
               )}
 
-              {/* Patient Reports for Clinician */}
               {currentTab === 'doctor_reports' && (
                 <ReportsView
                   user={user}
@@ -398,35 +602,29 @@ export function App() {
                 />
               )}
 
-              {/* Patient Progress */}
-              {currentTab === 'doctor_progress' && (
-                <ProgressAnalyticsView sessions={sessions} />
-              )}
+              {currentTab === 'doctor_progress' && <ProgressAnalyticsView sessions={sessions} />}
 
-              {/* Alerts & SOS */}
               {currentTab === 'doctor_alerts' && (
-                <AdminPortalView
-                  doctors={doctors}
-                  appointments={appointments}
-                  messages={messages}
-                  guardianAlerts={guardianAlerts}
-                  isAdminLoggedIn={true}
-                  onAdminLogin={() => setIsAdminLoggedIn(true)}
-                  onAdminLogout={handleLogout}
-                  onUpdateAppointmentStatus={handleUpdateAppointment}
-                  onReplyMessage={handleDoctorReply}
-                  onAddDoctor={handleAddDoctor}
+                <NotImplementedView
+                  title="Patient Safety Alerts"
+                  description="Alerts are persisted per patient on the server; the clinician alert console is still to be built."
+                  pending={[
+                    'Aggregate alerts across linked patients (GET /alerts)',
+                    'Acknowledge / escalate workflow',
+                    'Real-time notification delivery',
+                  ]}
                 />
               )}
 
-              {/* Doctor Telehealth & Appointments */}
-              {(currentTab === 'telehealth' || currentTab === 'doctor_appointments' || currentTab === 'doctor_messages') && (
+              {(currentTab === 'telehealth' ||
+                currentTab === 'doctor_appointments' ||
+                currentTab === 'doctor_messages') && (
                 <TelehealthView
                   user={user}
                   doctors={doctors}
                   appointments={appointments}
                   messages={messages}
-                  userRole={authRole}
+                  userRole={session.role}
                   onBookAppointment={handleBookAppointment}
                   onSendMessage={handleSendMessage}
                   onUpdateAppointmentStatus={handleUpdateAppointment}
@@ -442,13 +640,13 @@ export function App() {
           <p className="flex flex-wrap items-center justify-center gap-2">
             <span>PhysioAI Clinical Physical Therapy Suite</span>
             <span>•</span>
-            <span>Client-Side Kinematic Angle Verification</span>
+            <span>Server-verified session ({session.account.email})</span>
             <span>•</span>
             <button
-              onClick={() => handleOpenProfileModal('settings')}
+              onClick={() => void handleLogout()}
               className="text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
             >
-              Switch Role ({authRole.toUpperCase()})
+              Sign out ({session.role.toUpperCase()})
             </button>
           </p>
         </footer>
