@@ -49,7 +49,26 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id', name=op.f('pk_password_reset_tokens'))
     )
     op.create_index(op.f('ix_password_reset_tokens_account_id'), 'password_reset_tokens', ['account_id'], unique=False)
-    op.add_column('accounts', sa.Column('token_version', sa.Integer(), nullable=False))
+
+    # ``token_version`` is added as NOT NULL. Every existing row needs a value, so
+    # the column is created with a server-side default. Without it this statement
+    # fails on any database that already contains accounts - which is exactly the
+    # case when upgrading a live install, and the reason this migration used to
+    # be unusable outside a freshly created database.
+    op.add_column(
+        'accounts',
+        sa.Column('token_version', sa.Integer(), nullable=False, server_default=sa.text('0')),
+    )
+    # Belt and braces for a database that partially applied an earlier revision.
+    op.execute('UPDATE accounts SET token_version = 0 WHERE token_version IS NULL')
+
+    if op.get_bind().dialect.name == 'postgresql':
+        # Drop the temporary default so the schema matches the model, which
+        # supplies the value from Python. On SQLite this would require a full
+        # table rebuild (and rewriting the foreign keys that reference
+        # ``accounts``); that is a larger risk than the harmless default it would
+        # remove, so the default is deliberately retained there.
+        op.alter_column('accounts', 'token_version', server_default=None)
     # ### end Alembic commands ###
 
 

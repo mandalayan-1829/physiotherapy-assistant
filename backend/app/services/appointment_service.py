@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Account, Appointment, DoctorProfile
 from app.schemas.appointment import AppointmentCreate, AppointmentUpdate
-from app.services.access import ensure_link, linked_patient_ids
+from app.services.access import ensure_doctor_verified, ensure_link, linked_patient_ids
 from app.services.errors import ForbiddenError, NotFoundError
 
 
@@ -35,6 +35,10 @@ def create_appointment(
     doctor = db.get(DoctorProfile, payload.doctor_profile_id)
     if doctor is None:
         raise NotFoundError("Doctor not found.")
+
+    # An unverified clinician is not bookable. This is also what stops the
+    # booking from silently creating the doctor -> patient access link below.
+    ensure_doctor_verified(doctor)
 
     appointment = Appointment(
         patient_account_id=patient.id,

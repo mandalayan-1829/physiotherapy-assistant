@@ -19,8 +19,13 @@ def list_doctors(account: CurrentAccount, db: DbSession) -> list[DoctorOut]:
 
 
 @router.get("/doctors/{doctor_profile_id}", response_model=DoctorOut)
-def get_doctor(doctor_profile_id: int, _: CurrentAccount, db: DbSession) -> DoctorOut:
-    return doctor_service.get_profile(db, doctor_profile_id)
+def get_doctor(doctor_profile_id: int, account: CurrentAccount, db: DbSession) -> DoctorOut:
+    """One clinician profile.
+
+    Unverified (pending) profiles are not enumerable: they 404 for everyone
+    except the account that owns them.
+    """
+    return doctor_service.get_profile(db, doctor_profile_id, account)
 
 
 @router.get("/patients", response_model=list[PatientSummary])

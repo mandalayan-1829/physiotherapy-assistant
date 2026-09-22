@@ -28,6 +28,20 @@ def get_patient_profile(db: Session, account_id: int) -> PatientProfile | None:
     ).scalar_one_or_none()
 
 
+def ensure_doctor_verified(profile: DoctorProfile) -> None:
+    """Deny-by-default gate for clinician accounts (OWASP API6).
+
+    Registering an account with ``role: "doctor"`` deliberately does not confer
+    clinical authority. Until an operator verifies the profile, it cannot be
+    booked and cannot acquire access to any patient's records.
+    """
+    if not profile.is_verified:
+        raise ForbiddenError(
+            "This clinician account has not been verified yet, so it cannot be "
+            "booked or contacted."
+        )
+
+
 def link_exists(db: Session, doctor_profile_id: int, patient_account_id: int) -> bool:
     return (
         db.execute(

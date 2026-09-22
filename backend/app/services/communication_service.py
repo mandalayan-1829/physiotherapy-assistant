@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.models import Account, DoctorProfile, GuardianAlert, Message
 from app.schemas.alert import AlertCreate, MessageCreate
-from app.services.access import ensure_link, ensure_patient_access, get_doctor_profile
+from app.services.access import (
+    ensure_doctor_verified,
+    ensure_link,
+    ensure_patient_access,
+    get_doctor_profile,
+)
 from app.services.errors import ForbiddenError, NotFoundError
 
 
@@ -27,6 +32,10 @@ def send_message(db: Session, requester: Account, payload: MessageCreate) -> Mes
     doctor = db.get(DoctorProfile, payload.doctor_profile_id)
     if doctor is None:
         raise NotFoundError("Doctor not found.")
+
+    # Contacting a clinician creates the access link, so an unverified account
+    # must not be reachable this way either.
+    ensure_doctor_verified(doctor)
 
     if requester.role == "patient":
         ensure_link(db, doctor.id, requester.id)

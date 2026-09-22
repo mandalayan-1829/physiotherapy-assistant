@@ -1,13 +1,14 @@
-"""Shared FastAPI dependencies: authentication and role guards."""
+"""Shared FastAPI dependencies: authentication, role guards and client identity."""
 
 from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import PURPOSE_ACCESS, decode_access_token
 from app.db.session import get_db
 from app.models import Account, ROLE_DOCTOR, ROLE_PATIENT
@@ -86,3 +87,23 @@ def require_doctor(account: CurrentAccount) -> Account:
 CurrentPatient = Annotated[Account, Depends(require_patient)]
 CurrentDoctor = Annotated[Account, Depends(require_doctor)]
 DbSession = Annotated[Session, Depends(get_db)]
+
+
+def get_client_ip(request: Request) -> str:
+    """Best-effort source address of the caller, used for abuse throttling.
+
+    ``X-Forwarded-For`` is only consulted when ``TRUST_PROXY_HEADERS`` is
+    enabled, because otherwise a client could spoof the header and reset its own
+    rate-limit bucket on every request.
+    """
+    if settings.trust_proxy_headers:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            first = forwarded.split(",")[0].strip()
+            if first:
+                return first
+    client = request.client
+    return client.host if client and client.host else "unknown"
+
+
+ClientIp = Annotated[str, Depends(get_client_ip)]

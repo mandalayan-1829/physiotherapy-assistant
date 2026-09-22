@@ -21,6 +21,9 @@ class DoctorOut(BaseModel):
     email: str
     hospital: str
     rating: float
+    # False until an operator verifies the clinician. Pending profiles are not
+    # listed in the directory and cannot be booked.
+    is_verified: bool = False
 
 
 class PatientSummary(BaseModel):

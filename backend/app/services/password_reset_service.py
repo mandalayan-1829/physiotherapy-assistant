@@ -32,6 +32,7 @@ from app.core.security import (
     verify_verification_code,
 )
 from app.models import (
+    SCOPE_AUTH_IP,
     SCOPE_LOGIN,
     SCOPE_PASSWORD_RESET_REQUEST,
     Account,
@@ -91,15 +92,35 @@ def _invalidate_account_tokens(db: Session, account_id: int, *, except_id: int |
         token.invalidated = True
 
 
+def _enforce_source_limit(db: Session, action: str, client_ip: str) -> None:
+    """Spend one unit of the per-source budget for a recovery-flow action.
+
+    The whole flow (request, verify, reset) is covered, because an attacker who
+    can enumerate codes does not care which step is throttled as long as one of
+    them is not. Keys are namespaced per action inside one shared scope.
+    """
+    rate_limit.enforce_limit(
+        db,
+        SCOPE_AUTH_IP,
+        f"{action}:{client_ip}",
+        settings.password_reset_max_requests_per_ip_per_hour,
+        RESET_REQUEST_WINDOW_SECONDS,
+        "Too many password reset attempts from this network. Please try again later.",
+    )
+
+
 # --- 1. Request a code ------------------------------------------------------
 
 
-def request_password_reset(db: Session, email: str, role: str | None) -> str:
+def request_password_reset(db: Session, email: str, role: str | None, client_ip: str) -> str:
     """Create a reset request and email a verification code.
 
     Always returns the same generic message, whether or not the address exists.
+    Throttled both per address (cooldown + hourly cap) and per source address.
     """
     normalized = email.strip().lower()
+
+    _enforce_source_limit(db, "forgot", client_ip)
 
     # Throttle every request (including unknown addresses) so this endpoint
     # cannot be used to probe for registered users.
@@ -191,9 +212,15 @@ def _send_code_email(account: Account, code: str, token: PasswordResetToken) -> 
 # --- 2. Verify the code -----------------------------------------------------
 
 
-def verify_reset_code(db: Session, email: str, code: str, role: str | None) -> tuple[str, int]:
+def verify_reset_code(
+    db: Session, email: str, code: str, role: str | None, client_ip: str
+) -> tuple[str, int]:
     """Return ``(reset_token, expires_in_seconds)`` when the code is valid."""
     normalized = email.strip().lower()
+
+    # Guards against brute-forcing a 6-digit code across many accounts.
+    _enforce_source_limit(db, "verify", client_ip)
+
     account = _find_account(db, normalized)
 
     if account is None or not account.is_active:
@@ -250,8 +277,11 @@ def reset_password(
     reset_token: str,
     new_password: str,
     confirm_password: str | None = None,
+    client_ip: str = "unknown",
 ) -> None:
     """Validate the temporary token, set the new password and end old sessions."""
+    _enforce_source_limit(db, "reset", client_ip)
+
     payload = decode_access_token(reset_token)
     if payload is None or payload.get("purpose") != PURPOSE_PASSWORD_RESET:
         raise AuthError(INVALID_RESET_TOKEN_MESSAGE)

@@ -12,6 +12,8 @@ import type {
   DietEntry,
   Doctor,
   Message,
+  MetricsSource,
+  MonthlyReport,
   Note,
   Session,
   User,
@@ -169,6 +171,8 @@ export interface WorkoutSessionDTO {
   form_accuracy: number;
   duration_sec: number;
   notes: string;
+  /** Provenance of the metrics; see `MetricsSource`. */
+  metrics_source: MetricsSource;
   performed_at: string;
 }
 
@@ -183,7 +187,125 @@ export function sessionToView(dto: WorkoutSessionDTO): Session {
     formAccuracy: dto.form_accuracy,
     durationSec: dto.duration_sec,
     notes: dto.notes,
+    metricsSource: dto.metrics_source,
     date: formatDateTime(dto.performed_at),
+  };
+}
+
+/** True when a form score is a real measurement rather than a logged guess. */
+export function isMeasuredSession(session: Session): boolean {
+  return session.metricsSource === 'pose_inference';
+}
+
+// --- Monthly reports --------------------------------------------------------
+
+/**
+ * A monthly report as served by `GET /reports` and `POST /reports/generate`.
+ *
+ * Every measurement in `payload` is computed by the backend from persisted
+ * sessions, so the same month reports the same figures for every client.
+ */
+export interface ReportDTO {
+  id: number;
+  patient_account_id: number;
+  month_key: string;
+  month_name: string;
+  payload: {
+    patient_name: string;
+    patient_email: string;
+    total_sessions: number;
+    total_reps: number;
+    total_duration_sec: number;
+    avg_form_accuracy: number;
+    measured_sessions: number;
+    unmeasured_sessions: number;
+    exercise_breakdown: {
+      exercise_label: string;
+      sessions: number;
+      reps: number;
+      measured_sessions: number;
+      avg_accuracy: number;
+    }[];
+    insufficient_data: boolean;
+    no_measured_sessions: boolean;
+    active_days_percent: number;
+  };
+  generated_at: string;
+}
+
+/**
+ * Context the backend does not own.
+ *
+ * Whether a checkup is booked, and who the attending clinician is, are pieces of
+ * presentation assembled from the appointment and directory APIs that the view
+ * has already loaded. They are passed in rather than duplicated server-side.
+ *
+ * No measurement is derived here.
+ */
+export interface ReportPresentationContext {
+  assignedDoctorName?: string;
+  assignedDoctorEmail?: string;
+  hasUpcomingCheckup: boolean;
+}
+
+/**
+ * A factual, non-diagnostic summary of what the month actually contains.
+ *
+ * It states measurement coverage and nothing more: no clinical conclusion is
+ * drawn, and no trend is asserted that the data cannot support.
+ */
+function progressTrend(dto: ReportDTO): string {
+  const { total_sessions, measured_sessions } = dto.payload;
+  if (measured_sessions === 0) {
+    return total_sessions === 0
+      ? 'No sessions were recorded for this month.'
+      : `${total_sessions} session(s) were recorded, but none included a measured movement, so no form score is available.`;
+  }
+  return `Form score averaged over ${measured_sessions} of ${total_sessions} session(s) that included a measured movement.`;
+}
+
+export function reportToView(
+  dto: ReportDTO,
+  context: ReportPresentationContext,
+): MonthlyReport {
+  const p = dto.payload;
+  const recipients = [p.patient_email];
+  if (context.hasUpcomingCheckup && context.assignedDoctorEmail) {
+    recipients.push(context.assignedDoctorEmail);
+  }
+
+  return {
+    // View-model ids are strings; the backend's is an integer primary key.
+    id: String(dto.id),
+    monthKey: dto.month_key,
+    monthName: dto.month_name,
+    generatedDate: formatDateTime(dto.generated_at),
+    patientId: dto.patient_account_id,
+    patientName: p.patient_name,
+    patientEmail: p.patient_email,
+    assignedDoctorName: context.assignedDoctorName,
+    assignedDoctorEmail: context.assignedDoctorEmail,
+    hasUpcomingCheckup: context.hasUpcomingCheckup,
+    totalSessions: p.total_sessions,
+    measuredSessions: p.measured_sessions,
+    totalReps: p.total_reps,
+    completedExercises: p.exercise_breakdown.length,
+    // Averaged over measured sessions only, server-side. Zero means "nothing was
+    // measured", never "zero quality".
+    avgAccuracy: p.avg_form_accuracy,
+    avgScore: p.avg_form_accuracy,
+    activeDaysPercent: p.active_days_percent,
+    exerciseBreakdown: p.exercise_breakdown.map((entry) => ({
+      exerciseLabel: entry.exercise_label,
+      sessions: entry.sessions,
+      reps: entry.reps,
+      avgAccuracy: entry.avg_accuracy,
+    })),
+    progressTrend: progressTrend(dto),
+    // Report e-mail delivery has no transport wired up. The status records that
+    // rather than claiming a message was sent.
+    emailStatus: 'Draft',
+    recipients,
   };
 }
 

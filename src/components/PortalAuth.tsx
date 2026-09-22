@@ -17,6 +17,8 @@ import {
   Timer,
   User as UserIcon,
 } from 'lucide-react';
+import patientVector from '../assets/login/patient.png';
+import doctorPhoto from '../assets/login/doctor.webp';
 import type { UserRole } from '../types';
 import { ApiError } from '../services/api';
 import {
@@ -490,6 +492,38 @@ export function PortalAuth({ onAuthenticated }: PortalAuthProps) {
 
               {/* Portal Header */}
               <div className="text-center mb-6">
+
+                {/* Domain visual: the supplied patient illustration, or the supplied
+                    clinician photo for the clinical domain.
+
+                    Purely additive - every existing badge, heading, sub-heading,
+                    tab, field and message below is untouched. Both assets are
+                    imported so Vite fingerprints and serves them in dev, in the
+                    production build and on Vercel. Sizes are bounded and scale with
+                    the viewport, so neither image pushes the form out of the way. */}
+                {isPatientDomain && (
+                  <img
+                    src={patientVector}
+                    alt="Patient physiotherapy illustration"
+                    width={144}
+                    height={144}
+                    draggable={false}
+                    decoding="async"
+                    className="mx-auto mb-4 h-28 w-28 sm:h-36 sm:w-36 object-contain select-none"
+                  />
+                )}
+
+                {!isPatientDomain && (
+                  <img
+                    src={doctorPhoto}
+                    alt="Physiotherapist profile photo"
+                    width={80}
+                    height={80}
+                    draggable={false}
+                    decoding="async"
+                    className="mx-auto mb-3 h-16 w-16 sm:h-20 sm:w-20 rounded-full object-cover ring-2 ring-[#A7F3D0] shadow-xs select-none"
+                  />
+                )}
                 <div
                   className="inline-flex p-3 rounded-xl mb-3 border shadow-xs"
                   style={{

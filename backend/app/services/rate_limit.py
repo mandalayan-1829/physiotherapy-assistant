@@ -2,6 +2,11 @@
 
 Counters live in the database (``auth_throttles``) rather than in browser
 storage, so they survive restarts and apply across workers.
+
+Because the counters are rows in the shared database, the limits hold across
+multiple backend instances without Redis. That is the property that makes this
+implementation safe to run behind a load balancer; a process-local in-memory
+counter would not be.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AuthThrottle
+from app.services.errors import TooManyRequestsError
 
 
 def _now() -> datetime:
@@ -101,3 +107,28 @@ def is_cooldown_active(
     elapsed = (_now() - _as_aware(row.last_attempt_at)).total_seconds()
     remaining = int(cooldown_seconds - elapsed)
     return max(0, remaining)
+
+
+def enforce_limit(
+    db: Session,
+    scope: str,
+    key: str,
+    max_attempts: int,
+    window_seconds: int,
+    message: str,
+) -> ThrottleState:
+    """Record one attempt, raising ``TooManyRequestsError`` once the cap is hit.
+
+    The counter is incremented *before* the limit is evaluated on the next call,
+    so a burst that races past the check still ends up throttled. The caller is
+    responsible for supplying a stable, non-spoofable key.
+    """
+    state = peek(db, scope, key, window_seconds)
+    if state.attempt_count >= max_attempts:
+        raise TooManyRequestsError(
+            message,
+            extra={
+                "retry_after_seconds": state.seconds_until_window_end(window_seconds),
+            },
+        )
+    return register_attempt(db, scope, key, window_seconds)

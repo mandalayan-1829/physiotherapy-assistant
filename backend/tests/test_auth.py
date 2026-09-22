@@ -4,9 +4,34 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models import Account
 from tests.conftest import auth_headers, login, register
+
+LEGACY_PASSWORD = "LegacyPass123"
+
+
+def _create_legacy_account(email: str) -> None:
+    """Insert an account exactly as the aiphysio.db importer would."""
+    from app.core.security import hash_legacy_sha256
+    from app.models import PatientProfile
+
+    db = SessionLocal()
+    try:
+        account = Account(
+            email=email,
+            full_name="Legacy User",
+            password_hash="!legacy-account-must-reset!",
+            role="patient",
+            legacy_password_hash=hash_legacy_sha256(LEGACY_PASSWORD),
+        )
+        db.add(account)
+        db.flush()
+        db.add(PatientProfile(account_id=account.id))
+        db.commit()
+    finally:
+        db.close()
 
 
 def test_registration_works(client, new_patient):
@@ -74,31 +99,34 @@ def test_unknown_email_fails(client):
     assert response.json()["detail"] == "Invalid email or password."
 
 
-def test_legacy_sha256_password_is_upgraded_to_bcrypt_on_login(client):
-    """Accounts migrated from aiphysio.db sign in once with their old digest."""
-    from app.core.security import hash_legacy_sha256
-    from app.models import PatientProfile
+def test_legacy_sha256_digest_cannot_authenticate_by_default(client):
+    """An unsalted SHA-256 digest is not an acceptable authentication factor.
 
-    email = "legacy.user@example.com"
-    password = "LegacyPass123"
+    ``ALLOW_LEGACY_PASSWORD_LOGIN`` is off by default, so the migration-only
+    verifier is never consulted and the account cannot sign in with the legacy
+    password. The owner resets the password through the normal flow instead.
+    """
+    email = "legacy.default.off@example.com"
+    _create_legacy_account(email)
 
-    db = SessionLocal()
-    try:
-        account = Account(
-            email=email,
-            full_name="Legacy User",
-            password_hash="!legacy-account-must-reset!",
-            role="patient",
-            legacy_password_hash=hash_legacy_sha256(password),
-        )
-        db.add(account)
-        db.flush()
-        db.add(PatientProfile(account_id=account.id))
-        db.commit()
-    finally:
-        db.close()
+    response = login(client, email, LEGACY_PASSWORD, "patient")
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid email or password."
 
-    assert login(client, email, password, "patient").status_code == 200
+
+def test_legacy_sha256_password_is_upgraded_to_bcrypt_when_explicitly_enabled(
+    client, monkeypatch
+):
+    """With the migration flag switched on, a legacy digest upgrades to bcrypt once.
+
+    This is an operator-controlled, one-time path used while importing
+    aiphysio.db; it is never active in a normal deployment.
+    """
+    email = "legacy.upgrade@example.com"
+    monkeypatch.setattr(settings, "allow_legacy_password_login", True)
+    _create_legacy_account(email)
+
+    assert login(client, email, LEGACY_PASSWORD, "patient").status_code == 200
 
     db = SessionLocal()
     try:
@@ -106,10 +134,22 @@ def test_legacy_sha256_password_is_upgraded_to_bcrypt_on_login(client):
     finally:
         db.close()
 
+    # The insecure digest is discarded after the first successful sign-in.
     assert refreshed.legacy_password_hash is None
     assert refreshed.password_hash.startswith("$2")
-    # And the new bcrypt hash accepts the same password.
-    assert login(client, email, password, "patient").status_code == 200
+
+    # The account now authenticates with bcrypt even with the flag turned off again.
+    monkeypatch.setattr(settings, "allow_legacy_password_login", False)
+    assert login(client, email, LEGACY_PASSWORD, "patient").status_code == 200
+
+
+def test_legacy_digest_cannot_be_used_after_upgrade(client, monkeypatch):
+    """A wrong legacy password is still refused while the migration flag is on."""
+    email = "legacy.wrongpass@example.com"
+    monkeypatch.setattr(settings, "allow_legacy_password_login", True)
+    _create_legacy_account(email)
+
+    assert login(client, email, "NotTheLegacyPass123", "patient").status_code == 401
 
 
 def test_login_wrong_portal_role_is_rejected(client, new_doctor):

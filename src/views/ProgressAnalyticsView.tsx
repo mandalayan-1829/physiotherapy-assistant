@@ -42,13 +42,18 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
   const totalSessions = sessions.length;
   const totalReps = sessions.reduce((acc, s) => acc + s.reps, 0);
   const totalMinutes = Math.round(sessions.reduce((acc, s) => acc + s.durationSec, 0) / 60);
-  const avgAccuracy = sessions.length > 0
-    ? Math.round(sessions.reduce((acc, s) => acc + s.formAccuracy, 0) / sessions.length)
-    : 0;
+
+  // Only sessions where pose inference actually produced landmarks can carry a
+  // form score. Sessions without a measurement are excluded rather than being
+  // averaged in as zero.
+  const measuredSessions = sessions.filter((s) => s.metricsSource === 'pose_inference');
+  const avgAccuracy = measuredSessions.length > 0
+    ? Math.round(measuredSessions.reduce((acc, s) => acc + s.formAccuracy, 0) / measuredSessions.length)
+    : null;
 
   // Breakdown by exercise
   const exerciseStats: Record<string, { count: number; totalReps: number; avgAcc: number; type: string }> = {};
-  sessions.forEach((s) => {
+  measuredSessions.forEach((s) => {
     if (!exerciseStats[s.exercise]) {
       const info = EXERCISES[s.exercise];
       exerciseStats[s.exercise] = { 
@@ -87,7 +92,8 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
           <span>Rehabilitation Biometrics & Analytics</span>
         </h1>
         <p className="text-xs sm:text-sm text-slate-600 mt-1">
-          Historical record of joint angular precision, kinematic stability, and routine adherence.
+          Recorded sessions, form scores measured by on-device pose inference, and repetition volume
+          over time. Sessions recorded without a measurement are counted separately and never scored.
         </p>
       </div>
 
@@ -109,7 +115,8 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
                   Overall Progress Summary
                 </h2>
                 <span className="text-xs text-slate-500">
-                  {totalSessions} sessions completed • {totalReps} total reps • {avgAccuracy}% avg accuracy
+                  {totalSessions} sessions recorded • {totalReps} total reps • {measuredSessions.length} measured
+                  {avgAccuracy === null ? ' • no form score yet' : ` • ${avgAccuracy}% avg form score`}
                 </span>
               </div>
             </div>
@@ -139,9 +146,13 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
                   <span className="text-[11px] text-slate-400">Target repetitions</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[11px] uppercase tracking-wider">Average Form Accuracy</span>
-                  <span className="text-2xl font-bold font-mono text-blue-600 mt-1 block">{avgAccuracy}%</span>
-                  <span className="text-[11px] text-slate-400">Computer vision score</span>
+                  <span className="text-slate-500 block text-[11px] uppercase tracking-wider">Average Form Score</span>
+                  <span className="text-2xl font-bold font-mono text-blue-600 mt-1 block">
+                    {avgAccuracy === null ? 'N/A' : `${avgAccuracy}%`}
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    {avgAccuracy === null ? 'No measured session yet' : `From ${measuredSessions.length} measured session(s)`}
+                  </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px] uppercase tracking-wider">Active Exercise Time</span>
@@ -152,8 +163,12 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
 
               <div className="pt-3 flex items-center justify-between text-xs text-slate-700">
                 <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  <span>Clinical Adherence: Patient is currently on track with the prescribed rehabilitation frequency.</span>
+                  <ShieldCheck className="w-4 h-4 text-slate-500" />
+                  <span className="text-slate-600">
+                    {totalSessions - measuredSessions.length === 0
+                      ? 'Every recorded session included a measured movement.'
+                      : `${totalSessions - measuredSessions.length} of ${totalSessions} recorded session(s) contain no measurement, so they are excluded from the average form score.`}
+                  </span>
                 </div>
               </div>
             </div>
@@ -278,20 +293,28 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
                 <div className="space-y-3">
                   <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200">
                     <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-2">
-                      Recent Session Accuracy Curve
+                      Recent Session Form Scores
                     </span>
                     <div className="space-y-2">
                       {sessions.slice(0, 6).map((s, idx) => (
                         <div key={s.id || idx} className="flex items-center gap-3 text-xs">
                           <span className="w-24 text-slate-500 font-mono text-[11px] truncate">{s.date.split(' ')[0]}</span>
                           <span className="w-36 text-slate-900 font-medium truncate">{s.exerciseLabel}</span>
-                          <div className="flex-1 h-2 rounded-full bg-slate-200 overflow-hidden">
-                            <div
-                              className="h-full bg-blue-600 rounded-full"
-                              style={{ width: `${s.formAccuracy}%` }}
-                            />
-                          </div>
-                          <span className="w-12 text-right font-mono font-bold text-emerald-600">{s.formAccuracy}%</span>
+                          {s.metricsSource === 'pose_inference' ? (
+                            <>
+                              <div className="flex-1 h-2 rounded-full bg-slate-200 overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-600 rounded-full"
+                                  style={{ width: `${s.formAccuracy}%` }}
+                                />
+                              </div>
+                              <span className="w-12 text-right font-mono font-bold text-emerald-600">{s.formAccuracy}%</span>
+                            </>
+                          ) : (
+                            <span className="flex-1 text-right font-mono text-slate-400 text-[11px]">
+                              No measurement recorded
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -370,15 +393,21 @@ export function ProgressAnalyticsView({ sessions }: ProgressAnalyticsViewProps) 
 
                       <div className="flex items-center gap-4 text-xs shrink-0 self-end sm:self-center">
                         <span className="text-slate-500 font-mono">{session.reps} reps / {Math.round(session.durationSec)}s</span>
-                        <span className={`px-2 py-0.5 rounded font-mono font-bold text-xs ${
-                          session.formAccuracy >= 90
-                            ? 'bg-[#ECFDF3] text-[#065F46] border border-[#A7F3D0]'
-                            : session.formAccuracy >= 80
-                            ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                            : 'bg-amber-50 text-amber-800 border border-amber-200'
-                        }`}>
-                          {session.formAccuracy}% accuracy
-                        </span>
+                        {session.metricsSource === 'pose_inference' ? (
+                          <span className={`px-2 py-0.5 rounded font-mono font-bold text-xs ${
+                            session.formAccuracy >= 90
+                              ? 'bg-[#ECFDF3] text-[#065F46] border border-[#A7F3D0]'
+                              : session.formAccuracy >= 80
+                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                              : 'bg-amber-50 text-amber-800 border border-amber-200'
+                          }`}>
+                            {session.formAccuracy}% form score
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded font-mono text-xs bg-slate-100 text-slate-500 border border-slate-200">
+                            Not measured
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))}

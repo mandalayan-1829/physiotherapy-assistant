@@ -8,7 +8,44 @@
  * hardcoded at call sites.
  */
 
-const BASE_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/\/+$/, '');
+import { isPlaceholderApiUrl } from '../config/apiUrl';
+
+/**
+ * Resolve the backend base URL.
+ *
+ * `npm run build` aborts when `VITE_API_URL` is missing, points at a local host
+ * or is a documentation placeholder (see `vite.config.ts`), so a production
+ * bundle always carries a real URL. The localhost default below therefore exists
+ * *only* for `npm run dev`; it is never reachable in a production build.
+ */
+function resolveBaseUrl(): string {
+  const configured = (import.meta.env.VITE_API_URL ?? '').trim();
+
+  if (configured) {
+    // Defence in depth for a bundle produced outside `npm run build`: sending
+    // requests to a documentation hostname is never useful, in any environment.
+    if (isPlaceholderApiUrl(configured)) {
+      throw new Error(
+        `VITE_API_URL is set to the placeholder ${JSON.stringify(configured)}, which is ` +
+          'not a real backend. Point it at the deployed backend URL.',
+      );
+    }
+    return configured.replace(/\/+$/, '');
+  }
+
+  if (import.meta.env.PROD) {
+    // Should be unreachable: the build fails first. Kept as a guard so a bundle
+    // produced by some other toolchain cannot silently target localhost.
+    throw new Error(
+      'VITE_API_URL is not set. This build cannot reach the backend; refusing to ' +
+        'silently fall back to localhost.',
+    );
+  }
+
+  return 'http://localhost:8000';
+}
+
+const BASE_URL = resolveBaseUrl();
 
 /**
  * The access token is a credential, nothing more. It is the only thing kept in

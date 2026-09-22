@@ -255,9 +255,15 @@ export function App() {
         formAccuracy: sessionData.formAccuracy,
         durationSec: sessionData.durationSec,
         notes: sessionData.notes,
+        metricsSource: sessionData.metricsSource,
       });
       setSessions((previous) => [created, ...previous]);
-      showToast(`Saved session: ${created.exerciseLabel} (${created.formAccuracy}% accuracy)`);
+      // A session without a real measurement must not be announced as a score.
+      showToast(
+        created.metricsSource === 'pose_inference'
+          ? `Saved session: ${created.exerciseLabel} (${created.formAccuracy}% measured form)`
+          : `Saved session: ${created.exerciseLabel} (logged manually, no form score)`,
+      );
       setActiveExercise(null);
       setCurrentTab('history');
     } catch (error) {

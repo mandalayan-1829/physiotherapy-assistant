@@ -2,13 +2,53 @@
 node_modules/
 dist/
 
-# Local databases created by the new backend
-backend/physioai.db
-*.sqlite3
+# MediaPipe WASM runtime, copied out of node_modules by
+# scripts/copy-mediapipe-assets.mjs on install/dev/build. It is a build artefact
+# that is fully reproducible from package-lock.json, so it is never committed.
+public/mediapipe/
 
-# Environment files
+# ---------------------------------------------------------------------------
+# Research artefacts (never version-control participant data)
+# ---------------------------------------------------------------------------
+# Raw and processed camera captures, per-participant data and exports.
+data/raw/
+data/processed/
+data/exports/
+data/participants/
+
+# Reproducible evaluation outputs. A run is written to its own
+# results/experiment_<id>/ directory and kept, so these are working artefacts
+# rather than source. Commit only the failure log and methodology docs.
+results/
+experiments/**/*.json
+experiments/**/*.csv
+
+# Local experiment scratch space
+*.session.json
+*.landmarks.json
+*.landmarks.csv
+
+# TypeScript incremental build artefacts
+*.tsbuildinfo
+
+# Databases. This application never version-controls its runtime database.
+# The pre-existing legacy database (aiphysio.db, read only by
+# backend/scripts/migrate_legacy.py) is also deliberately excluded: it holds
+# identifiable health information. Keep a copy OUTSIDE the repository.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite3-journal
+aiphysio.db
+backend/physioai.db
+
+# Environment files. Only the placeholder templates may be committed.
 .env
 .env.local
+.env.*
+!.env.example
+!**/.env.example
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

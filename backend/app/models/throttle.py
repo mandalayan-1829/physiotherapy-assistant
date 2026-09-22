@@ -15,6 +15,10 @@ from app.db.base import Base
 
 SCOPE_LOGIN = "login"
 SCOPE_PASSWORD_RESET_REQUEST = "password_reset_request"
+#: Per-source (IP) counters for the unauthenticated auth surface. Keys are
+#: namespaced per action, e.g. ``register:203.0.113.7``, so one scope holds every
+#: action while each keeps its own limit.
+SCOPE_AUTH_IP = "auth_ip"
 
 
 class AuthThrottle(Base):
@@ -25,7 +29,8 @@ class AuthThrottle(Base):
 
     # e.g. "login" or "password_reset_request"
     scope: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
-    # Lower-cased e-mail address for the action being throttled.
+    # Lower-cased e-mail address, or an action-prefixed source address, for the
+    # action being throttled (e.g. ``register:203.0.113.7``).
     key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
 
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

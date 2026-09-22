@@ -2,7 +2,9 @@
 
 Passwords are never stored in plaintext. New passwords use bcrypt. The legacy
 ``aiphysio.db`` stored unsalted SHA-256 digests, so a verification helper for
-that format is kept purely to allow a one-time upgrade on successful login.
+that format is kept **purely** to allow a one-time upgrade on successful login -
+and it is only reachable when ``ALLOW_LEGACY_PASSWORD_LOGIN`` is explicitly
+enabled. With the default configuration no SHA-256 digest can authenticate.
 """
 
 from __future__ import annotations
@@ -38,12 +40,21 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def hash_legacy_sha256(password: str) -> str:
-    """Reproduce the unsalted SHA-256 digest used by the legacy database."""
+    """Reproduce the unsalted SHA-256 digest used by the legacy database.
+
+    Deprecated: retained only so a one-time import of ``aiphysio.db`` can verify
+    an existing digest. Never use this for a new password.
+    """
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 def verify_legacy_password(password: str, legacy_hash: str) -> bool:
-    """Check ``password`` against a legacy unsalted SHA-256 digest."""
+    """Check ``password`` against a legacy unsalted SHA-256 digest.
+
+    Only reachable when ``ALLOW_LEGACY_PASSWORD_LOGIN`` is enabled (see
+    ``app.services.auth_service``). Unsaltsed SHA-256 is not a suitable password
+    hash; treat a positive result as "must change password immediately".
+    """
     if not legacy_hash:
         return False
     return hmac.compare_digest(hash_legacy_sha256(password), legacy_hash.lower())
@@ -107,6 +118,26 @@ PURPOSE_ACCESS = "access"
 PURPOSE_PASSWORD_RESET = "password_reset"
 
 
+#: Claims that every token issued by this API must carry. ``iss`` prevents a
+#: token minted by a different service (sharing a secret by accident) from being
+#: accepted here, and the others are the minimum needed to authorise a request.
+REQUIRED_CLAIMS = ("sub", "exp", "iat", "iss", "purpose")
+
+
+#: Only HMAC algorithms are acceptable: tokens are signed with SECRET_KEY. The
+#: allow-list is explicit because passing ``algorithms`` to ``jwt.decode`` is what
+#: makes PyJWT reject ``alg: none`` and algorithm-confusion attempts.
+ALLOWED_JWT_ALGORITHMS = ("HS256", "HS384", "HS512")
+
+
+def _sign(payload: dict[str, Any]) -> str:
+    algorithm = settings.jwt_algorithm.upper()
+    if algorithm not in ALLOWED_JWT_ALGORITHMS:
+        # config.Settings already rejects this; belt and braces.
+        raise ValueError(f"Unsupported JWT algorithm: {settings.jwt_algorithm!r}")
+    return jwt.encode(payload, settings.secret_key, algorithm=algorithm)
+
+
 def create_access_token(
     subject: str | int,
     role: str,
@@ -117,6 +148,10 @@ def create_access_token(
 
     ``token_version`` mirrors the account's counter so that changing a password
     can invalidate every previously issued token.
+
+    The ``role`` claim is advisory only. Authorization always resolves the role
+    from the database (``app.api.deps.get_current_account``), so a tampered or
+    stale claim can never grant privileges.
     """
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
@@ -124,18 +159,20 @@ def create_access_token(
         "role": role,
         "tv": token_version,
         "purpose": PURPOSE_ACCESS,
+        "iss": settings.jwt_issuer,
         "iat": now,
         "exp": now + timedelta(minutes=settings.access_token_expire_minutes),
     }
     if extra:
         payload.update(extra)
-    return jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm)
+    return _sign(payload)
 
 
 def create_password_reset_token(subject: str | int, reset_token_id: int) -> tuple[str, int]:
     """Create the short-lived authorisation issued after code verification.
 
-    Returns ``(token, expires_in_seconds)``.
+    Returns ``(token, expires_in_seconds)``. The token carries the reset row id
+    in ``jti`` so a verified code can only ever produce one password change.
     """
     now = datetime.now(timezone.utc)
     ttl_minutes = settings.password_reset_token_ttl_minutes
@@ -143,18 +180,29 @@ def create_password_reset_token(subject: str | int, reset_token_id: int) -> tupl
         "sub": str(subject),
         "jti": str(reset_token_id),
         "purpose": PURPOSE_PASSWORD_RESET,
+        "iss": settings.jwt_issuer,
         "iat": now,
         "exp": now + timedelta(minutes=ttl_minutes),
     }
-    return (
-        jwt.encode(payload, settings.secret_key, algorithm=settings.jwt_algorithm),
-        ttl_minutes * 60,
-    )
+    return _sign(payload), ttl_minutes * 60
 
 
 def decode_access_token(token: str) -> dict[str, Any] | None:
-    """Decode a JWT, returning ``None`` when it is invalid or expired."""
+    """Decode and fully validate a JWT, returning ``None`` when it is not valid.
+
+    Rejects, without raising: a missing or bad signature, ``alg: none``, an
+    unexpected algorithm, a foreign issuer, an expired or not-yet-valid token,
+    and any token missing one of :data:`REQUIRED_CLAIMS`.
+    """
+    if not token or not isinstance(token, str):
+        return None
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+        return jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=list(ALLOWED_JWT_ALGORITHMS),
+            issuer=settings.jwt_issuer,
+            options={"require": list(REQUIRED_CLAIMS), "verify_iss": True},
+        )
     except jwt.PyJWTError:
         return None

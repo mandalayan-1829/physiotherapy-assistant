@@ -1,8 +1,15 @@
-"""Server-side authorization is enforced, not just hidden in the UI."""
+"""Server-side authorization is enforced, not just hidden in the UI.
+
+This suite is the guard rail on the authorization system described in
+``app/services/access.py``. The system is deliberately not redesigned here; the
+only adjustment is that a clinician must be verified before a patient can create
+a relationship with them (see ``tests/test_doctor_verification.py``), so the
+helpers below verify the clinician first, exactly as an operator would.
+"""
 
 from __future__ import annotations
 
-from tests.conftest import auth_headers
+from tests.conftest import auth_headers, verify_doctor
 
 
 def _book(client, patient_token, doctor_profile_id: int):
@@ -128,6 +135,9 @@ def test_doctor_gains_access_after_relationship_is_established(client, new_patie
         "doctor_profile"
     ]["id"]
 
+    # The clinician is only discoverable/bookable once verified.
+    verify_doctor(doctor_profile_id)
+
     # The patient can see the clinician in the directory.
     directory_ids = [d["id"] for d in client.get("/doctors", headers=auth_headers(patient_token)).json()]
     assert doctor_profile_id in directory_ids
@@ -155,6 +165,7 @@ def test_doctor_cannot_modify_another_doctors_appointment(client, new_patient, n
     doctor_a_profile = client.get("/auth/me", headers=auth_headers(doctor_a_token)).json()[
         "doctor_profile"
     ]["id"]
+    verify_doctor(doctor_a_profile)
     booking = _book(client, patient_token, doctor_a_profile)
     appointment_id = booking.json()["id"]
 
@@ -181,6 +192,7 @@ def test_patient_cannot_approve_own_appointment(client, new_patient, new_doctor)
     doctor_profile = client.get("/auth/me", headers=auth_headers(doctor_token)).json()[
         "doctor_profile"
     ]["id"]
+    verify_doctor(doctor_profile)
     appointment_id = _book(client, patient_token, doctor_profile).json()["id"]
 
     response = client.patch(

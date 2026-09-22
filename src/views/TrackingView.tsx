@@ -23,9 +23,11 @@ export function TrackingView({ exercise, targetReps, onSessionComplete, onBack }
           <span>Back to Exercises</span>
         </button>
 
+        {/* Neutral statement of fact: whether analysis is actually running is
+            reported by the tracker itself, which knows which mode was chosen. */}
         <div className="flex items-center gap-2 text-xs text-slate-500">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span>AI Biomechanics Engine Active</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+          <span>Pose processing runs on this device</span>
         </div>
       </div>
 

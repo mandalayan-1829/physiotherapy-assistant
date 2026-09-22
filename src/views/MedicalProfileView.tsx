@@ -28,6 +28,7 @@ export function MedicalProfileView({ user, onSaveProfile }: MedicalProfileViewPr
   const [formData, setFormData] = useState<User>({ ...user });
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [testSosSuccess, setTestSosSuccess] = useState<boolean>(false);
+  const [testSosError, setTestSosError] = useState<string | null>(null);
 
   // Accordion open states (one or multiple)
   const [openSection, setOpenSection] = useState<string | null>('basic');
@@ -56,9 +57,21 @@ export function MedicalProfileView({ user, onSaveProfile }: MedicalProfileViewPr
     setTimeout(() => setSavedSuccess(false), 4000);
   };
 
+  // Opens a pre-filled WhatsApp message to the configured guardian.
+  //
+  // There is deliberately no fallback phone number: sending a pain report to a
+  // hard-coded number would disclose the patient's health data to a stranger.
+  // With no number on file the action is refused and the patient is told why.
   const handleTestSos = () => {
-    const phone = formData.guardianWhatsapp || formData.emergencyContactPhone || '918293413240';
+    const phone = formData.guardianWhatsapp || formData.emergencyContactPhone;
     const cleanPhone = phone.replace(/[^0-9]/g, '');
+
+    if (!cleanPhone) {
+      setTestSosError('No guardian number is saved yet. Add one above first.');
+      setTimeout(() => setTestSosError(null), 6000);
+      return;
+    }
+
     const message = encodeURIComponent(
       `[PhysioAI Alert] ${formData.name} reported a pain spike (${formData.painIntensity}/10) or requested assistance during rehabilitation routine. Location: Home.`
     );
@@ -67,12 +80,12 @@ export function MedicalProfileView({ user, onSaveProfile }: MedicalProfileViewPr
     logGuardianAlert({
       userId: formData.id,
       alertType: 'emergency_help',
-      message: `Emergency SOS triggered to guardian (${formData.emergencyContactName || 'Emergency Contact'})`,
+      message: `Patient opened an emergency WhatsApp message for ${formData.emergencyContactName || 'Emergency Contact'}. Delivery depends on the patient pressing send in WhatsApp.`,
       sentTo: phone,
     });
 
     setTestSosSuccess(true);
-    setTimeout(() => setTestSosSuccess(false), 5000);
+    setTimeout(() => setTestSosSuccess(false), 8000);
     window.open(link, '_blank');
   };
 
@@ -799,9 +812,11 @@ export function MedicalProfileView({ user, onSaveProfile }: MedicalProfileViewPr
               {/* Test SOS dispatch banner */}
               <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 mt-2">
                 <div>
-                  <span className="font-semibold text-slate-900 block">Emergency Dispatch Verification</span>
+                  <span className="font-semibold text-slate-900 block">Emergency Contact Check</span>
                   <span className="text-[11px] text-slate-500">
-                    Test the WhatsApp emergency alert gateway to confirm your guardian receives instant SOS notifications.
+                    Opens a pre-filled WhatsApp message to the number above so you can confirm
+                    your guardian can be reached. The application does not send anything itself -
+                    the message goes out only when you press send in WhatsApp.
                   </span>
                 </div>
                 <button
@@ -810,9 +825,15 @@ export function MedicalProfileView({ user, onSaveProfile }: MedicalProfileViewPr
                   className="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-xs"
                 >
                   <Send className="w-3.5 h-3.5 text-blue-600" />
-                  <span>{testSosSuccess ? 'Test Sent' : 'Test Emergency Alert'}</span>
+                  <span>{testSosSuccess ? 'WhatsApp opened - press Send' : 'Open Test Message'}</span>
                 </button>
               </div>
+
+              {testSosError && (
+                <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5 mt-2">
+                  {testSosError}
+                </p>
+              )}
             </div>
           )}
         </div>

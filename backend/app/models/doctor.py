@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -16,6 +16,13 @@ class DoctorProfile(Base):
     ``account_id`` is nullable so that directory-only clinicians carried over
     from the legacy database are preserved even before they register a login
     account to claim the profile.
+
+    ``is_verified`` is the gate that stops self-registration from conferring
+    clinical authority (OWASP API6). An unverified clinician is invisible in the
+    patient-facing directory, cannot be booked, and cannot acquire access to a
+    patient's records. Verification is an out-of-band operations action
+    (``backend/scripts/verify_doctor.py``) because this application deliberately
+    has no admin role.
     """
 
     __tablename__ = "doctor_profiles"
@@ -38,8 +45,15 @@ class DoctorProfile(Base):
     hospital: Mapped[str] = mapped_column(String(255), default="")
     rating: Mapped[float] = mapped_column(Float, default=0.0)
 
+    # Deny-by-default: a clinician is not bookable or discoverable until an
+    # operator verifies them.
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     account: Mapped["Account | None"] = relationship(back_populates="doctor_profile")  # noqa: F821

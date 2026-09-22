@@ -10,6 +10,7 @@ import {
   doctorToView,
   messageToView,
   noteToView,
+  reportToView,
   sessionToView,
   senderToApi,
 } from './mappers';
@@ -19,6 +20,8 @@ import type {
   DoctorDTO,
   MessageDTO,
   NoteDTO,
+  ReportDTO,
+  ReportPresentationContext,
   WorkoutSessionDTO,
 } from './mappers';
 import type {
@@ -28,6 +31,8 @@ import type {
   Doctor,
   GuardianAlert,
   Message,
+  MetricsSource,
+  MonthlyReport,
   Note,
   Session,
 } from '../types';
@@ -77,6 +82,11 @@ export interface NewSession {
   formAccuracy: number;
   durationSec: number;
   notes: string;
+  /**
+   * States how the metrics were produced. Required, so a caller cannot
+   * accidentally have a manually logged session treated as a measurement.
+   */
+  metricsSource: MetricsSource;
 }
 
 export async function createSession(input: NewSession): Promise<Session> {
@@ -90,9 +100,55 @@ export async function createSession(input: NewSession): Promise<Session> {
       form_accuracy: input.formAccuracy,
       duration_sec: input.durationSec,
       notes: input.notes,
+      metrics_source: input.metricsSource,
     },
   });
   return sessionToView(data);
+}
+
+// --- Monthly reports --------------------------------------------------------
+//
+// Reports live in the backend. Previously the browser computed these aggregates
+// itself and persisted them to localStorage, which meant two devices could show
+// different figures for the same month and the numbers were not part of the
+// patient's record at all. Only the presentation context (attending clinician,
+// whether a checkup is booked) is assembled client-side.
+
+export async function listReports(
+  context: ReportPresentationContext,
+  patientAccountId?: number,
+): Promise<MonthlyReport[]> {
+  const data = await request<ReportDTO[]>(
+    `/reports${query({ patient_account_id: patientAccountId })}`,
+  );
+  return data.map((dto) => reportToView(dto, context));
+}
+
+/**
+ * Generate (or refresh) the report for a month and return the stored result.
+ *
+ * Regenerating an existing month updates the same row instead of creating a
+ * second one, so callers do not need to de-duplicate.
+ */
+export async function generateReport(
+  monthKey: string,
+  context: ReportPresentationContext,
+  patientAccountId?: number,
+): Promise<MonthlyReport> {
+  const data = await request<ReportDTO>('/reports/generate', {
+    method: 'POST',
+    body: { month_key: monthKey, patient_account_id: patientAccountId },
+  });
+  return reportToView(data, context);
+}
+
+/** Retrieve a single stored report by its id. */
+export async function getReport(
+  reportId: string | number,
+  context: ReportPresentationContext,
+): Promise<MonthlyReport> {
+  const data = await request<ReportDTO>(`/reports/${reportId}`);
+  return reportToView(data, context);
 }
 
 // --- Diet -------------------------------------------------------------------

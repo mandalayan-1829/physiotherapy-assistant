@@ -31,19 +31,32 @@ backend/
 
 ```bash
 cd backend
-python -m venv ../.venv                 # or reuse an existing environment
-../.venv/Scripts/python -m pip install -r requirements.txt   # Windows
-# source ../.venv/bin/activate && pip install -r requirements.txt   # macOS/Linux
 
-cp .env.example .env                    # then set SECRET_KEY
-python -m uvicorn app.main:app --reload --port 8000
+# Optional: a fresh environment for this project. Do NOT reuse the pre-existing
+# `.venv` in the repository root - it was built from the retired Streamlit
+# application's dependencies and does not match the current requirements.txt.
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements.txt   # Windows (Git Bash)
+# .venv/bin/python -m pip install -r requirements.txt     # macOS / Linux
+
+# Or install into the current interpreter (no environment needed):
+python -m pip install -r requirements.txt
+
+cp .env.example .env                    # then set SECRET_KEY (>= 32 chars)
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+Commands use `python -m ...` so they work with or without an activated
+environment. `SECRET_KEY` has no default - the app refuses to start without a
+strong one, which is deliberate.
 
 * Health check: `GET http://localhost:8000/health`
 * Interactive docs: `http://localhost:8000/docs`
 
-Tables are created automatically on startup. Point `DATABASE_URL` at
-PostgreSQL for production — no code changes are required.
+Tables are created automatically on startup, and Alembic owns schema evolution.
+Point `DATABASE_URL` at PostgreSQL for production (`postgresql+psycopg://...`)
+— no code changes are required.
 
 ## Import existing data (optional)
 

@@ -71,6 +71,18 @@ export interface User {
   createdAt: string;
 }
 
+/**
+ * How a session's metrics were produced.
+ *
+ *  - `pose_inference` real on-device pose estimation measured the movement
+ *  - `simulated`      the retired demo tracker fabricated the landmarks
+ *  - `manual`         the patient logged the set themselves; nothing was measured
+ *
+ * Only `pose_inference` sessions contribute to a form-accuracy average. This is
+ * enforced by the backend, not merely displayed here.
+ */
+export type MetricsSource = 'pose_inference' | 'simulated' | 'manual';
+
 export interface Session {
   id: number;
   userId: number;
@@ -78,9 +90,11 @@ export interface Session {
   exerciseLabel: string;
   reps: number;
   targetReps: number;
-  formAccuracy: number; // 0-100%
+  /** 0-100. Only meaningful when `metricsSource` is `pose_inference`. */
+  formAccuracy: number;
   durationSec: number;
   notes: string;
+  metricsSource: MetricsSource;
   date: string;
 }
 
@@ -145,12 +159,21 @@ export interface MonthlyReport {
   assignedDoctorEmail?: string;
   hasUpcomingCheckup: boolean;
   totalSessions: number;
+  /** Sessions that included a measured movement (pose inference). */
+  measuredSessions: number;
   totalReps: number;
   completedExercises: number;
-  missedSessions: number;
+  /**
+   * Mean form score over measured sessions only. Zero when nothing was
+   * measured - never an estimate.
+   */
   avgAccuracy: number;
   avgScore: number;
-  adherencePercent: number;
+  /**
+   * Share of elapsed days in the month with at least one recorded session.
+   * A defined figure derived from session dates, not an estimated adherence.
+   */
+  activeDaysPercent: number;
   exerciseBreakdown: {
     exerciseLabel: string;
     sessions: number;
@@ -158,9 +181,8 @@ export interface MonthlyReport {
     avgAccuracy: number;
   }[];
   progressTrend: string;
-  safetyEventsCount: number;
-  warningsCount: number;
-  emailStatus: 'Sent' | 'Pending' | 'Draft';
+  /** Report delivery is not implemented; the status records that fact. */
+  emailStatus: 'Sent' | 'Not sent' | 'Draft';
   emailSentDate?: string;
   recipients: string[];
 }
@@ -169,14 +191,18 @@ export interface DailyHistoryEntry {
   date: string; // YYYY-MM-DD
   displayDate: string;
   sessionsCount: number;
+  /** Sessions on this day that included a measured movement. */
+  measuredSessions: number;
   totalReps: number;
+  /** Repetitions across measured sessions only. */
+  measuredReps: number;
+  /** Always 0 when the day has no measured session. */
   correctReps: number;
   incorrectReps: number;
+  /** Mean form score over measured sessions; 0 when nothing was measured. */
   avgFormScore: number;
   totalDurationSec: number;
   exercises: string[];
-  warningsCount: number;
-  safetyEventsCount: number;
   sessions: Session[];
 }
 

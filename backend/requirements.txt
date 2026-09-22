@@ -2,13 +2,29 @@ fastapi==0.141.1
 uvicorn[standard]==0.52.4
 SQLAlchemy==2.0.36
 alembic==1.14.0
+# PostgreSQL driver for production (Railway). Without it the API starts fine on
+# SQLite and then dies with ModuleNotFoundError: No module named 'psycopg' the
+# moment DATABASE_URL points at postgresql+psycopg:// - i.e. only in production.
+# The [binary] extra ships a prebuilt libpq, so no system packages are needed.
+psycopg[binary]==3.3.6
 pydantic==2.13.5
 pydantic-settings==2.15.0
 email-validator==2.2.0
 bcrypt==4.2.1
-PyJWT==2.10.1
-python-multipart==0.0.20
+# Upgraded from 2.10.1: that release carries advisories on the token decode path,
+# which is the entire authentication mechanism. 2.13.0 is API-compatible with the
+# jwt.encode / jwt.decode / PyJWTError usage in app/core/security.py.
+PyJWT==2.13.0
+# Required by FastAPI for form/file parsing. No route currently uses multipart,
+# but the package is present transitively; 0.0.20 carries 11 known advisories.
+python-multipart==0.0.31
 
 # Test dependencies
 pytest==9.1.1
 httpx==0.28.1
+# packaging is used by the dependency-version regression test.
+packaging==26.3
+
+# Security tooling (optional, used by the pre-deployment audit):
+#   python -m pip install pip-audit
+#   python -m pip_audit -r requirements.txt

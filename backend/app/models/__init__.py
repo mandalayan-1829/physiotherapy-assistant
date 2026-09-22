@@ -16,7 +16,12 @@ from app.models.patient import PatientProfile
 from app.models.report import Report
 from app.models.reset import PasswordResetToken
 from app.models.session import WorkoutSession
-from app.models.throttle import SCOPE_LOGIN, SCOPE_PASSWORD_RESET_REQUEST, AuthThrottle
+from app.models.throttle import (
+    SCOPE_AUTH_IP,
+    SCOPE_LOGIN,
+    SCOPE_PASSWORD_RESET_REQUEST,
+    AuthThrottle,
+)
 
 __all__ = [
     "Account",
@@ -39,4 +44,5 @@ __all__ = [
     "AuthThrottle",
     "SCOPE_LOGIN",
     "SCOPE_PASSWORD_RESET_REQUEST",
+    "SCOPE_AUTH_IP",
 ]

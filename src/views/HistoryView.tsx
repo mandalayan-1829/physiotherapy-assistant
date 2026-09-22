@@ -207,16 +207,20 @@ export function HistoryView({ user, sessions }: HistoryViewProps) {
                       </div>
                       <div className="bg-white p-2.5 rounded-lg border border-slate-200">
                         <span className="text-slate-500 text-[10px] block">Valid Form Reps</span>
-                        <span className="font-bold text-emerald-600 mt-0.5 block">{day.correctReps} reps</span>
+                        <span className="font-bold text-emerald-600 mt-0.5 block">
+                          {day.measuredSessions > 0 ? `${day.correctReps} reps` : 'Not measured'}
+                        </span>
                       </div>
                       <div className="bg-white p-2.5 rounded-lg border border-slate-200">
                         <span className="text-slate-500 text-[10px] block">Needs Improvement</span>
-                        <span className="font-bold text-amber-600 mt-0.5 block">{day.incorrectReps} reps</span>
+                        <span className="font-bold text-amber-600 mt-0.5 block">
+                          {day.measuredSessions > 0 ? `${day.incorrectReps} reps` : 'Not measured'}
+                        </span>
                       </div>
                       <div className="bg-white p-2.5 rounded-lg border border-slate-200">
-                        <span className="text-slate-500 text-[10px] block">Safety Events</span>
+                        <span className="text-slate-500 text-[10px] block">Measured Sessions</span>
                         <span className="font-bold text-slate-900 mt-0.5 block">
-                          {day.warningsCount === 0 ? '0 Warnings' : `${day.warningsCount} Notice`}
+                          {day.measuredSessions} of {day.sessionsCount}
                         </span>
                       </div>
                     </div>
@@ -236,7 +240,7 @@ export function HistoryView({ user, sessions }: HistoryViewProps) {
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-slate-900">{s.exerciseLabel}</span>
                               <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200 font-mono">
-                                {s.formAccuracy}% Accuracy
+                                {s.metricsSource === 'pose_inference' ? `${s.formAccuracy}% form score` : 'Not measured'}
                               </span>
                               <span className="text-slate-400 font-mono text-[11px]">
                                 {s.date.split(' ')[1] || s.date}

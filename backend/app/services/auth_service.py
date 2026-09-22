@@ -13,7 +13,14 @@ from app.core.security import (
     verify_legacy_password,
     verify_password,
 )
-from app.models import SCOPE_LOGIN, Account, PatientProfile, ROLE_DOCTOR, ROLE_PATIENT
+from app.models import (
+    SCOPE_AUTH_IP,
+    SCOPE_LOGIN,
+    Account,
+    PatientProfile,
+    ROLE_DOCTOR,
+    ROLE_PATIENT,
+)
 from app.models.doctor import DoctorProfile
 from app.schemas.auth import RegisterRequest
 from app.services import rate_limit
@@ -37,8 +44,40 @@ def get_account(db: Session, account_id: int) -> Account | None:
     return db.get(Account, account_id)
 
 
-def register_account(db: Session, payload: RegisterRequest) -> Account:
-    """Create a new account with exactly one of the two allowed roles."""
+def _enforce_source_limit(
+    db: Session,
+    action: str,
+    client_ip: str,
+    max_attempts: int,
+    window_seconds: int,
+    message: str,
+) -> None:
+    """Throttle an unauthenticated action per source address.
+
+    Keyed by ``"<action>:<ip>"`` inside the shared ``auth_ip`` scope so every
+    auth action has its own budget while sharing one table.
+    """
+    rate_limit.enforce_limit(
+        db, SCOPE_AUTH_IP, f"{action}:{client_ip}", max_attempts, window_seconds, message
+    )
+
+
+def register_account(db: Session, payload: RegisterRequest, client_ip: str) -> Account:
+    """Create a new account with exactly one of the two allowed roles.
+
+    ``client_ip`` is required: registration is a fully unauthenticated write
+    path, so it must be rate-limited per source address rather than left open
+    (OWASP API4).
+    """
+    _enforce_source_limit(
+        db,
+        "register",
+        client_ip,
+        settings.register_max_requests_per_hour,
+        3600,
+        "Too many accounts have been created from this address. Please try again later.",
+    )
+
     email = payload.email.lower()
 
     if get_account_by_email(db, email):
@@ -65,6 +104,10 @@ def register_account(db: Session, payload: RegisterRequest) -> Account:
     if payload.role == ROLE_PATIENT:
         db.add(PatientProfile(account_id=account.id))
     else:
+        # Registering as a doctor creates a *pending* profile. It confers no
+        # clinical authority until an operator verifies it: the profile is not
+        # listed in the directory, cannot be booked, and cannot acquire access
+        # to a patient's records. See app.services.access.ensure_doctor_verified.
         db.add(
             DoctorProfile(
                 account_id=account.id,
@@ -72,6 +115,7 @@ def register_account(db: Session, payload: RegisterRequest) -> Account:
                 specialization=payload.specialization or "",
                 qualification=payload.qualification or "",
                 email=email,
+                is_verified=settings.doctor_default_verified,
             )
         )
 
@@ -91,7 +135,9 @@ def _too_many_attempts_error(seconds_remaining: int) -> TooManyRequestsError:
     )
 
 
-def authenticate(db: Session, email: str, password: str, role: str) -> Account:
+def authenticate(
+    db: Session, email: str, password: str, role: str, client_ip: str
+) -> Account:
     """Validate credentials and return the account.
 
     Failed attempts are counted server-side. After
@@ -101,8 +147,22 @@ def authenticate(db: Session, email: str, password: str, role: str) -> Account:
 
     The same messages and counters are used for unknown addresses, so the
     endpoint cannot be used to discover registered accounts.
+
+    In addition to the per-address counter, one budget is spent per source
+    address. Per-address counters alone do nothing against password spraying -
+    an attacker simply rotates the address - so the two limits are complementary
+    (OWASP API2).
     """
     normalized = email.strip().lower()
+
+    _enforce_source_limit(
+        db,
+        "login",
+        client_ip,
+        settings.login_max_requests_per_ip_per_window,
+        LOGIN_WINDOW_SECONDS,
+        "Too many sign-in attempts from this network. Please wait and try again.",
+    )
 
     state = rate_limit.peek(db, SCOPE_LOGIN, normalized, LOGIN_WINDOW_SECONDS)
     if state.attempt_count >= settings.login_max_failed_attempts:
@@ -133,9 +193,15 @@ def authenticate(db: Session, email: str, password: str, role: str) -> Account:
         raise fail()
 
     if not verify_password(password, account.password_hash):
-        # Legacy digest fallback (migration path only, from aiphysio.db).
-        if account.legacy_password_hash and verify_legacy_password(
-            password, account.legacy_password_hash
+        # Legacy digest migration path (unsalted SHA-256, inherited from
+        # aiphysio.db). It is *disabled by default*: an unsalted digest must not
+        # be usable as an authentication factor unless an operator has
+        # deliberately switched it on while importing legacy data.
+        legacy_allowed = settings.allow_legacy_password_login
+        if (
+            legacy_allowed
+            and account.legacy_password_hash
+            and verify_legacy_password(password, account.legacy_password_hash)
         ):
             account.password_hash = hash_password(password)
             account.legacy_password_hash = None

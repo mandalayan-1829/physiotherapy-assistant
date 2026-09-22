@@ -17,14 +17,32 @@ sys.path.insert(0, str(BACKEND_ROOT))
 _TEST_DB = Path(tempfile.mkdtemp(prefix="physioai-tests-")) / "test.db"
 
 os.environ["DATABASE_URL"] = f"sqlite:///{_TEST_DB.as_posix()}"
-os.environ["SECRET_KEY"] = "test-secret-key"
+# A >=32 character value: the application now refuses to start with a weak or
+# placeholder signing key, which is asserted by tests/test_security_config.py.
+os.environ["SECRET_KEY"] = "test-only-signing-key-0123456789abcdefghijklmnop"
+os.environ["ENVIRONMENT"] = "test"
 os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 os.environ["LEGACY_DATABASE_PATH"] = str(_TEST_DB)  # never touch the real legacy db
+# The insecure legacy SHA-256 path is off by default; the single test that covers
+# it switches it on explicitly.
+os.environ["ALLOW_LEGACY_PASSWORD_LOGIN"] = "false"
+
+# Abuse limits are raised for the suite because every request in a test run
+# appears to come from one client address, so production values would throttle
+# the suite itself. The limiters are exercised explicitly, with tightened
+# settings, in tests/test_rate_limiting.py.
+os.environ["REGISTER_MAX_REQUESTS_PER_HOUR"] = "100000"
+os.environ["LOGIN_MAX_REQUESTS_PER_IP_PER_WINDOW"] = "100000"
+os.environ["PASSWORD_RESET_MAX_REQUESTS_PER_IP_PER_HOUR"] = "100000"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import select  # noqa: E402
 
+from app.core.config import settings  # noqa: E402
+from app.db.session import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import DoctorProfile  # noqa: E402
 from app.services.email_service import clear_console_outbox  # noqa: E402
 
 
@@ -63,6 +81,37 @@ def login(client: TestClient, email: str, password: str, role: str):
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+def verify_doctor(doctor_profile_id: int) -> None:
+    """Simulate the out-of-band verification an operator performs.
+
+    Clinician profiles are unverified (and therefore unbookable and invisible in
+    the directory) until verified. There is no admin API by design, so the tests
+    flip the flag the same way ``backend/scripts/verify_doctor.py`` does.
+    """
+    db = SessionLocal()
+    try:
+        profile = db.get(DoctorProfile, doctor_profile_id)
+        assert profile is not None, f"no doctor profile with id={doctor_profile_id}"
+        profile.is_verified = True
+        db.commit()
+    finally:
+        db.close()
+
+
+def verify_doctor_by_email(email: str) -> int:
+    """Verify a clinician by e-mail and return the profile id."""
+    db = SessionLocal()
+    try:
+        profile = db.execute(
+            select(DoctorProfile).where(DoctorProfile.email == email.lower())
+        ).scalar_one()
+        profile.is_verified = True
+        db.commit()
+        return profile.id
+    finally:
+        db.close()
 
 
 @pytest.fixture

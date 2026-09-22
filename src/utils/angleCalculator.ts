@@ -7,11 +7,31 @@ export interface Point2D {
 
 /**
  * Calculates the angle at point B, formed by points A-B-C.
- * Replicates core/angle_calculator.py:
- * BA = A - B
- * BC = C - B
- * cos_theta = dot(BA, BC) / (|BA| * |BC|)
- * angle = arccos(clamp(cos_theta, -1, 1)) in degrees
+ *
+ * Coordinate system
+ * ----------------
+ * MediaPipe returns 33 landmarks normalised to the frame: `x` and `y` are
+ * fractions of the image width and height in [0, 1], and `y` increases
+ * *downwards*. `z` is roughly the same scale as `x`.
+ *
+ * Because the coordinates are normalised, absolute distances depend on how much
+ * of the frame the subject fills. The angle here is therefore scale-invariant,
+ * which is why it - rather than a raw joint distance - is the primary feature for
+ * the exercise state machines. Anything that *does* depend on a distance is
+ * normalised first (see the torso/limb ratios in `exerciseEngine.ts`).
+ *
+ * Math
+ * ----
+ * With BA = A - B and BC = C - B (vectors pointing away from the vertex B):
+ *
+ *     cos(theta) = dot(BA, BC) / (|BA| * |BC|)
+ *     theta      = arccos(clamp(cos(theta), -1, 1))
+ *
+ * The clamp guards against floating-point drift pushing the cosine marginally
+ * outside [-1, 1], which would otherwise make `arccos` return NaN and poison
+ * every downstream feature for that frame.
+ *
+ * Returns the angle in degrees, rounded to one decimal place.
  */
 export function calculateAngle(a: Point2D | [number, number], b: Point2D | [number, number], c: Point2D | [number, number]): number {
   const ax = Array.isArray(a) ? a[0] : a.x;

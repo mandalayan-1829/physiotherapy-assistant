@@ -4,9 +4,17 @@ Two transports are provided:
 
 * ``SmtpEmailSender`` — real delivery through any SMTP provider (configured
   entirely from environment variables; no credentials are ever hardcoded).
+  Works with any provider, so switching vendors never touches the password-reset
+  logic.
 * ``ConsoleEmailSender`` — development fallback used when SMTP is not
-  configured. It records the message server-side and logs an explicit warning
-  that **no email was actually sent**. It never reports success.
+  configured. It records the message in memory for tests and logs an explicit
+  warning that **no email was actually sent**.
+
+Message bodies are treated as sensitive: they contain single-use password reset
+codes, so **bodies are never logged** by any transport, in any environment. The
+in-memory ``outbox`` of the console transport is the only place a body is kept,
+and it exists solely so the automated tests can complete the flow. Production
+refuses to start without a real mail transport (see ``app.core.config``).
 
 Delivery results are returned to the caller so that an unconfigured or failing
 mail server is never silently presented to the user as a sent email.
@@ -61,6 +69,7 @@ class SmtpEmailSender(EmailSender):
         from_name: str,
         use_tls: bool,
         timeout: int,
+        use_ssl: bool = False,
     ) -> None:
         self.host = host
         self.port = port
@@ -70,6 +79,8 @@ class SmtpEmailSender(EmailSender):
         self.from_name = from_name
         self.use_tls = use_tls
         self.timeout = timeout
+        # Implicit TLS (SMTPS, usually port 465) versus STARTTLS (usually 587).
+        self.use_ssl = use_ssl or port == 465
 
     def send(self, message: OutboundEmail) -> DeliveryResult:
         email = EmailMessage()
@@ -81,13 +92,19 @@ class SmtpEmailSender(EmailSender):
             email.add_alternative(message.html_body, subtype="html")
 
         try:
-            with smtplib.SMTP(self.host, self.port, timeout=self.timeout) as server:
-                if self.use_tls:
+            if self.use_ssl:
+                server_ctx = smtplib.SMTP_SSL(self.host, self.port, timeout=self.timeout)
+            else:
+                server_ctx = smtplib.SMTP(self.host, self.port, timeout=self.timeout)
+            with server_ctx as server:
+                if self.use_tls and not self.use_ssl:
                     server.starttls()
                 if self.username:
                     server.login(self.username, self.password)
                 server.send_message(email)
         except Exception as exc:  # noqa: BLE001 - reported, never swallowed silently
+            # Only the transport-level error is logged. The message body (which
+            # carries the reset code) is never included.
             logger.error("SMTP delivery to %s failed: %s", message.to, exc)
             return DeliveryResult(
                 delivered=False,
@@ -103,25 +120,26 @@ class SmtpEmailSender(EmailSender):
 
 @dataclass
 class ConsoleEmailSender(EmailSender):
-    """Development transport: records the message for local inspection."""
+    """Development transport: records the message in memory for tests.
+
+    The body is **never logged**. A reset code that reaches a log file has
+    effectively leaked: logs are copied, shipped to aggregators and read by
+    people who should not be able to reset a patient's password. Tests read the
+    code from :func:`get_console_outbox` instead.
+    """
 
     transport = "console"
     outbox: list[OutboundEmail] = field(default_factory=list)
 
     def send(self, message: OutboundEmail) -> DeliveryResult:
         self.outbox.append(message)
+        # Only the fact that delivery was attempted is logged - not the subject,
+        # the recipient or the body. The body carries the reset code, and even the
+        # subject is unnecessary detail to retain.
         logger.warning(
             "EMAIL NOT SENT (console backend). Configure SMTP_HOST/SMTP_USERNAME/"
-            "SMTP_PASSWORD or set EMAIL_BACKEND=smtp to deliver real mail.\n"
-            "Recipient: %s\nSubject: %s\n--- development-only message body ---\n%s\n"
-            "-------------------------------------",
-            message.to,
-            message.subject,
-            # The body (and therefore the verification code) is printed only by
-            # this development transport. The SMTP transport never logs the
-            # message contents, and the console transport is only selected when
-            # no mail provider is configured.
-            message.text_body,
+            "SMTP_PASSWORD or set EMAIL_BACKEND=smtp to deliver real mail. "
+            "Message contents (including any verification code) are withheld from logs."
         )
         return DeliveryResult(
             delivered=False,
@@ -137,7 +155,12 @@ _console_sender = ConsoleEmailSender()
 
 
 def get_email_sender() -> EmailSender:
-    """Build the configured sender. SMTP settings are read from the environment."""
+    """Build the configured sender. SMTP settings are read from the environment.
+
+    Any standards-compliant provider works (Resend, Brevo, SendGrid, Postmark,
+    AWS SES, a corporate relay, …) because delivery is plain SMTP. Port 465 is
+    treated as implicit TLS, everything else uses STARTTLS when enabled.
+    """
     if settings.resolved_email_backend() == "smtp":
         return SmtpEmailSender(
             host=settings.smtp_host,
@@ -148,12 +171,17 @@ def get_email_sender() -> EmailSender:
             from_name=settings.smtp_from_name,
             use_tls=settings.smtp_use_tls,
             timeout=settings.email_timeout_seconds,
+            use_ssl=settings.smtp_use_ssl,
         )
     return _console_sender
 
 
 def get_console_outbox() -> list[OutboundEmail]:
-    """Expose recorded messages. Used by tests and local development only."""
+    """Expose recorded messages.
+
+    Test-only: this is the one place a message body is retained, so the suite can
+    complete a password reset without the code ever being logged.
+    """
     return _console_sender.outbox
 
 

@@ -98,6 +98,9 @@ def test_report_generation_uses_persisted_sessions(client, new_patient):
             "target_reps": 40,
             "form_accuracy": 91,
             "duration_sec": 300,
+            # Only a session that declares real pose inference contributes to the
+            # form-accuracy average.
+            "metrics_source": "pose_inference",
         },
     )
 
@@ -107,6 +110,8 @@ def test_report_generation_uses_persisted_sessions(client, new_patient):
     assert payload["total_sessions"] == 1
     assert payload["total_reps"] == 40
     assert payload["avg_form_accuracy"] == 91.0
+    assert payload["measured_sessions"] == 1
+    assert payload["unmeasured_sessions"] == 0
 
     listed = client.get("/reports", headers=headers)
     assert len(listed.json()) == 1

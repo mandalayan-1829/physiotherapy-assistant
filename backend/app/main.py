@@ -4,6 +4,10 @@ Run locally with:
 
     cd backend
     uvicorn app.main:app --reload --port 8000
+
+The application refuses to start unless it is configured safely (see
+``app.core.config``); an insecure or missing ``SECRET_KEY`` raises
+``ConfigurationError`` at import time, before any request is served.
 """
 
 from __future__ import annotations
@@ -42,6 +46,11 @@ app = FastAPI(
     title=settings.project_name,
     version=settings.api_version,
     lifespan=lifespan,
+    # Interactive documentation is disabled in production: the OpenAPI document
+    # is a complete map of the attack surface.
+    docs_url=settings.docs_url,
+    redoc_url=settings.redoc_url,
+    openapi_url=settings.openapi_url,
 )
 
 app.add_middleware(
@@ -51,6 +60,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """Attach conservative security headers to every response.
+
+    A strict Content-Security-Policy is intentionally *not* set here: this
+    single-page app loads Google Fonts and YouTube iframes, so a CSP must be
+    written and verified against the real bundle in a browser before it can be
+    enabled. That is tracked as a follow-up rather than guessed at.
+    """
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # The exercise tracker needs the camera; nothing else is required.
+    response.headers.setdefault(
+        "Permissions-Policy", "camera=(self), microphone=(), geolocation=()"
+    )
+    if settings.is_production:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 @app.exception_handler(ServiceError)

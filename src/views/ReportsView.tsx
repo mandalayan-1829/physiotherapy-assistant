@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { 
   Activity, 
   AlertCircle, 
@@ -24,14 +24,9 @@ import {
   X 
 } from 'lucide-react';
 import { Appointment, Doctor, MonthlyReport, Session, User } from '../types';
-import { 
-  generateMonthlyReport, 
-  getHistoricalDailyEntries, 
-  getMonthlyReports, 
-  getTodayDateString, 
-  getTodaySessions, 
-  sendMonthlyReportEmail 
-} from '../utils/storage';
+import { getHistoricalDailyEntries, getTodayDateString, getTodaySessions } from '../utils/storage';
+import { generateReport, listReports } from '../services/physio';
+import type { ReportPresentationContext } from '../services/mappers';
 
 interface ReportsViewProps {
   user: User;
@@ -49,26 +44,41 @@ export function ReportsView({
   onNavigate,
 }: ReportsViewProps) {
   const [activeSubTab, setActiveSubTab] = useState<'daily' | 'weekly' | 'monthly' | 'history'>('monthly');
-  const [selectedMonth, setSelectedMonth] = useState<string>('2026-09');
-  const [reportsList, setReportsList] = useState<MonthlyReport[]>(() => getMonthlyReports());
+  const [selectedMonth, setSelectedMonth] = useState<string>(getTodayDateString().slice(0, 7));
+  // Reports are read from the backend, so the view has to model the request
+  // lifecycle: loading, failure and "this month has no report yet".
+  const [reportsList, setReportsList] = useState<MonthlyReport[]>([]);
+  const [reportsLoading, setReportsLoading] = useState<boolean>(true);
+  const [reportsError, setReportsError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState<boolean>(false);
   const [emailStatusFeedback, setEmailStatusFeedback] = useState<string | null>(null);
   const [selectedExerciseFilter, setSelectedExerciseFilter] = useState<string>('all');
 
   // Today and historical aggregates
   const todaySessions = getTodaySessions(sessions);
   const dailyEntries = getHistoricalDailyEntries(sessions);
+  // Repetitions and form scores are only reported for sessions that actually
+  // measured a movement. Nothing is extrapolated from an unmeasured session.
+  const measuredToday = todaySessions.filter((s) => s.metricsSource === 'pose_inference');
+  const todayFormScore = measuredToday.length
+    ? Math.round(measuredToday.reduce((acc, s) => acc + s.formAccuracy, 0) / measuredToday.length)
+    : 0;
+  const todayMeasuredReps = measuredToday.reduce((acc, s) => acc + s.reps, 0);
+  const todayGoodReps = measuredToday.length
+    ? Math.round(todayMeasuredReps * (todayFormScore / 100))
+    : 0;
   const todayEntry = dailyEntries.find((d) => d.date === getTodayDateString()) || {
     date: getTodayDateString(),
     displayDate: 'Today',
     sessionsCount: todaySessions.length,
+    measuredSessions: measuredToday.length,
     totalReps: todaySessions.reduce((acc, s) => acc + s.reps, 0),
-    correctReps: Math.round(todaySessions.reduce((acc, s) => acc + (s.reps * (s.formAccuracy / 100)), 0)),
-    incorrectReps: 0,
-    avgFormScore: todaySessions.length ? Math.round(todaySessions.reduce((acc, s) => acc + s.formAccuracy, 0) / todaySessions.length) : 0,
+    measuredReps: todayMeasuredReps,
+    correctReps: todayGoodReps,
+    incorrectReps: measuredToday.length ? Math.max(0, todayMeasuredReps - todayGoodReps) : 0,
+    avgFormScore: todayFormScore,
     totalDurationSec: todaySessions.reduce((acc, s) => acc + s.durationSec, 0),
     exercises: Array.from(new Set(todaySessions.map((s) => s.exerciseLabel))),
-    warningsCount: 0,
-    safetyEventsCount: 0,
     sessions: todaySessions,
   };
 
@@ -77,39 +87,93 @@ export function ReportsView({
   weekCutoff.setDate(weekCutoff.getDate() - 7);
   const cutoffStr = weekCutoff.toISOString().split('T')[0];
   const weekSessions = sessions.filter((s) => s.date.split(' ')[0] >= cutoffStr);
+  const weekMeasured = weekSessions.filter((s) => s.metricsSource === 'pose_inference');
   const weekTotalReps = weekSessions.reduce((acc, s) => acc + s.reps, 0);
-  const weekAvgAccuracy = weekSessions.length > 0
-    ? Math.round(weekSessions.reduce((acc, s) => acc + s.formAccuracy, 0) / weekSessions.length)
-    : 91;
+  // A window with no measured session reports no score. It does not report a
+  // default or "typical" percentage.
+  const weekAvgAccuracy = weekMeasured.length > 0
+    ? Math.round(weekMeasured.reduce((acc, s) => acc + s.formAccuracy, 0) / weekMeasured.length)
+    : null;
   const weekTargetSessions = 7;
-  const weekAdherence = Math.min(100, Math.round((weekSessions.length / weekTargetSessions) * 100));
+  const weekActiveDays = new Set(weekSessions.map((s) => s.date.split(' ')[0])).size;
 
-  // Current active monthly report
-  const activeMonthlyReport = reportsList.find((r) => r.monthKey === selectedMonth) || (
-    // Fallback: generate on the fly
-    generateMonthlyReport(selectedMonth, user, sessions, appointments, doctors)
-  );
+  /**
+   * Presentation-only context the backend does not own.
+   *
+   * The backend computes every measurement in a report from persisted sessions.
+   * Whether a checkup is booked, and which clinician is attending, are assembled
+   * here from the appointment and directory data this view already holds.
+   */
+  const reportContext: ReportPresentationContext = useMemo(() => {
+    const upcoming = appointments.find(
+      (appointment) =>
+        (appointment.status === 'confirmed' ||
+          appointment.status === 'scheduled' ||
+          appointment.status === 'ready' ||
+          appointment.status === 'approved') &&
+        appointment.date >= getTodayDateString(),
+    );
+    const assignedDoc = doctors.find((doctor) => doctor.name === user.doctorName);
+    return {
+      assignedDoctorName: assignedDoc?.name,
+      assignedDoctorEmail: assignedDoc?.email,
+      hasUpcomingCheckup: !!upcoming,
+    };
+  }, [appointments, doctors, user.doctorName]);
 
-  const handleGenerateReport = () => {
-    const fresh = generateMonthlyReport(selectedMonth, user, sessions, appointments, doctors);
-    setReportsList(getMonthlyReports());
-    setEmailStatusFeedback(`Clinical report for ${fresh.monthName} generated and compiled successfully.`);
-    setTimeout(() => setEmailStatusFeedback(null), 4000);
+  const loadReports = useCallback(async () => {
+    setReportsLoading(true);
+    setReportsError(null);
+    try {
+      setReportsList(await listReports(reportContext));
+    } catch (error) {
+      setReportsError(
+        error instanceof Error ? error.message : 'Reports could not be loaded.',
+      );
+    } finally {
+      setReportsLoading(false);
+    }
+  }, [reportContext]);
+
+  useEffect(() => {
+    void loadReports();
+  }, [loadReports]);
+
+  // The month is only "active" if the backend actually holds a report for it.
+  // Nothing is generated as a side effect of rendering.
+  const activeMonthlyReport = reportsList.find((r) => r.monthKey === selectedMonth) ?? null;
+
+  const handleGenerateReport = async () => {
+    setGenerating(true);
+    setReportsError(null);
+    try {
+      const fresh = await generateReport(selectedMonth, reportContext);
+      await loadReports();
+      setReportsList((previous) => {
+        const withoutMonth = previous.filter((r) => r.monthKey !== fresh.monthKey);
+        return [fresh, ...withoutMonth].sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+      });
+      setEmailStatusFeedback(
+        `Report for ${fresh.monthName} generated from ${fresh.measuredSessions} measured session(s) of ${fresh.totalSessions} recorded.`,
+      );
+      setTimeout(() => setEmailStatusFeedback(null), 5000);
+    } catch (error) {
+      setReportsError(
+        error instanceof Error ? error.message : 'The report could not be generated.',
+      );
+    } finally {
+      setGenerating(false);
+    }
   };
 
-  const handleSendEmail = (reportId: string) => {
-    const updated = sendMonthlyReportEmail(reportId);
-    if (updated) {
-      setReportsList(getMonthlyReports());
-      if (updated.recipients.length > 1) {
-        setEmailStatusFeedback(
-          `Monthly report dispatched to patient (${updated.patientEmail}) AND attending physician (${updated.assignedDoctorEmail}) due to upcoming checkup.`
-        );
-      } else {
-        setEmailStatusFeedback(`Monthly report dispatched to patient (${updated.patientEmail}).`);
-      }
-      setTimeout(() => setEmailStatusFeedback(null), 5000);
-    }
+  const handleSendEmail = (report: MonthlyReport) => {
+    // No mail transport is configured for reports, so nothing is dispatched. Say
+    // so rather than recording a delivery that did not happen - and do not
+    // persist anything locally to imply one.
+    setEmailStatusFeedback(
+      `Report e-mail delivery is not configured, so no message was sent. Intended recipients: ${report.recipients.join(', ')}.`,
+    );
+    setTimeout(() => setEmailStatusFeedback(null), 5000);
   };
 
   const handleExportReport = (report: MonthlyReport) => {
@@ -126,11 +190,9 @@ Upcoming Scheduled Checkup: ${report.hasUpcomingCheckup ? 'Yes (Clinical review 
 CLINICAL REHABILITATION SUMMARY:
 - Total Workouts / Sessions: ${report.totalSessions}
 - Cumulative Repetitions: ${report.totalReps}
-- Average Kinematic Form Score: ${report.avgAccuracy}%
-- Protocol Adherence Rate: ${report.adherencePercent}%
-- Missed Sessions: ${report.missedSessions}
-- Recorded Safety Warnings: ${report.warningsCount}
-- Emergency Safety Triggers: ${report.safetyEventsCount}
+- Sessions With Measured Movement: ${report.measuredSessions} of ${report.totalSessions}
+- Average Form Score (measured sessions only): ${report.measuredSessions > 0 ? `${report.avgAccuracy}%` : 'Not measured'}
+- Days Active In Month: ${report.activeDaysPercent}% of elapsed days
 
 EXERCISE BREAKDOWN:
 ${report.exerciseBreakdown.map((ex) => `• ${ex.exerciseLabel}: ${ex.reps} reps across ${ex.sessions} sessions (Avg Form: ${ex.avgAccuracy}%)`).join('\n')}
@@ -140,7 +202,9 @@ ${report.progressTrend}
 
 DELIVERY STATUS:
 - Status: ${report.emailStatus}
-- Dispatched To: ${report.recipients.join(', ')}
+${report.emailStatus === 'Not sent'
+  ? '- NOTE: report e-mail delivery is not configured, so no message was transmitted.'
+  : `- Intended Recipients: ${report.recipients.join(', ')}`}
 ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
 ====================================================`;
 
@@ -314,11 +378,16 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold text-slate-900">{s.exerciseLabel}</span>
                         <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                          {s.formAccuracy}% Accuracy
+                          {s.metricsSource === 'pose_inference' ? `${s.formAccuracy}% form score` : 'Not measured'}
                         </span>
                         <span className="text-xs text-slate-400 font-mono">{s.date.split(' ')[1] || s.date}</span>
                       </div>
-                      <p className="text-xs text-slate-600">{s.notes || 'Routine completed with standard kinematic alignment.'}</p>
+                      <p className="text-xs text-slate-600">
+                        {s.notes ||
+                          (s.metricsSource === 'pose_inference'
+                            ? 'Session recorded with pose-inference measurement.'
+                            : 'Session recorded without a measurement.')}
+                      </p>
                     </div>
 
                     <div className="flex items-center gap-4 text-xs font-mono shrink-0">
@@ -354,7 +423,7 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
             </div>
             <div className="flex items-center gap-2">
               <span className="px-3 py-1 rounded-full text-xs font-semibold bg-[#ECFDF3] text-[#065F46] border border-[#A7F3D0]">
-                Adherence: {weekAdherence}%
+                Active days: {weekActiveDays} of {weekTargetSessions}
               </span>
             </div>
           </div>
@@ -363,9 +432,9 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
               <span className="text-xs text-slate-500 block">Weekly Workout Sessions</span>
               <span className="text-2xl font-bold font-mono text-slate-900 mt-1 block">{weekSessions.length} / 7</span>
-              <span className="text-xs text-emerald-600 mt-1 flex items-center gap-1 font-medium">
+              <span className="text-xs text-slate-500 mt-1 flex items-center gap-1 font-medium">
                 <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>On track with prescribed protocol</span>
+                <span>Recorded in the last 7 days</span>
               </span>
             </div>
 
@@ -376,9 +445,13 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
             </div>
 
             <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-              <span className="text-xs text-slate-500 block">Average Kinematic Accuracy</span>
-              <span className="text-2xl font-bold font-mono text-emerald-600 mt-1 block">{weekAvgAccuracy}%</span>
-              <span className="text-xs text-slate-500 mt-1 block">AI Computer Vision verified form</span>
+              <span className="text-xs text-slate-500 block">Average Form Score</span>
+              <span className="text-2xl font-bold font-mono text-emerald-600 mt-1 block">
+                {weekAvgAccuracy === null ? 'N/A' : `${weekAvgAccuracy}%`}
+              </span>
+              <span className="text-xs text-slate-500 mt-1 block">
+                {weekAvgAccuracy === null ? 'No measured session in this window' : 'From pose-inference sessions only'}
+              </span>
             </div>
           </div>
 
@@ -417,7 +490,53 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
       {/* ================================================================ */}
       {/* SECTION C: MONTHLY REPORT (Requirements 7, 8, 9) */}
       {/* ================================================================ */}
-      {activeSubTab === 'monthly' && (
+      {/* Loading / failure / empty states. A month only renders a report document
+          once the backend confirms it holds one. */}
+      {activeSubTab === 'monthly' && reportsLoading && (
+        <div className="bg-white rounded-xl border border-slate-200 p-10 text-center text-slate-500 text-sm">
+          <RefreshCw className="w-6 h-6 mx-auto text-slate-300 mb-2 animate-spin" />
+          <p className="font-semibold text-slate-700">Loading stored reports…</p>
+        </div>
+      )}
+
+      {activeSubTab === 'monthly' && !reportsLoading && reportsError && (
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+            <div>
+              <p className="font-semibold">Reports could not be loaded</p>
+              <p className="mt-0.5 leading-relaxed">{reportsError}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => void loadReports()}
+            className="px-3 py-1.5 rounded-lg bg-white border border-rose-200 text-rose-700 font-semibold shrink-0 cursor-pointer hover:bg-rose-100"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {activeSubTab === 'monthly' && !reportsLoading && !reportsError && !activeMonthlyReport && (
+        <div className="bg-white rounded-xl border border-slate-200 p-10 text-center">
+          <FileText className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+          <p className="font-semibold text-slate-700">No report stored for this month</p>
+          <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto leading-relaxed">
+            A report is generated from the sessions recorded in the month you select.
+            Nothing is created until you ask for it.
+          </p>
+          <button
+            onClick={() => void handleGenerateReport()}
+            disabled={generating}
+            className="mt-4 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin' : ''}`} />
+            <span>{generating ? 'Generating…' : `Generate report for ${selectedMonth}`}</span>
+          </button>
+        </div>
+      )}
+
+      {activeSubTab === 'monthly' && !reportsLoading && !reportsError && activeMonthlyReport && (
         <div className="space-y-5">
           
           {/* Controls Bar: Month Selector, Generate, Export, Email */}
@@ -442,8 +561,8 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                 onClick={handleGenerateReport}
                 className="px-3 py-1.5 mt-4 md:mt-0 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-200"
               >
-                <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-                <span>Re-Generate</span>
+                <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${generating ? 'animate-spin' : ''}`} />
+                <span>{generating ? 'Generating…' : 'Re-Generate'}</span>
               </button>
             </div>
 
@@ -457,7 +576,7 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
               </button>
 
               <button
-                onClick={() => handleSendEmail(activeMonthlyReport.id)}
+                onClick={() => handleSendEmail(activeMonthlyReport)}
                 className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
               >
                 <Send className="w-3.5 h-3.5 fill-white" />
@@ -484,7 +603,7 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                     Monthly Rehabilitation Assessment: {activeMonthlyReport.monthName}
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Generated: {activeMonthlyReport.generatedDate} • Automated Kinematic Computer Vision Evaluation
+                    Generated: {activeMonthlyReport.generatedDate} • {activeMonthlyReport.measuredSessions} of {activeMonthlyReport.totalSessions} sessions measured by pose inference
                   </p>
                 </div>
 
@@ -501,9 +620,9 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                     <span>Email Status: {activeMonthlyReport.emailStatus}</span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-1">
-                    {activeMonthlyReport.emailSentDate 
-                      ? `Dispatched ${activeMonthlyReport.emailSentDate}` 
-                      : 'Ready for clinical transmission'}
+                    {activeMonthlyReport.emailSentDate
+                      ? `Marked sent ${activeMonthlyReport.emailSentDate}`
+                      : 'Delivery not configured - no message is transmitted'}
                   </p>
                 </div>
               </div>
@@ -520,10 +639,10 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                 <div className="bg-white p-3 rounded-lg border border-slate-200">
                   <span className="text-[10px] font-mono uppercase text-slate-400 block">ATTENDING CLINICIAN & RECIPIENT</span>
                   <span className="font-bold text-slate-900 text-sm mt-0.5 block">
-                    {activeMonthlyReport.assignedDoctorName || 'Dr. Aarav Patel'}
+                    {activeMonthlyReport.assignedDoctorName || 'No clinician assigned'}
                   </span>
                   <span className="text-slate-600 block">
-                    {activeMonthlyReport.assignedDoctorEmail || 'dr.aarav@physioai.health'}
+                    {activeMonthlyReport.assignedDoctorEmail || 'Not on file'}
                   </span>
                   <div className="mt-1 flex items-center gap-1.5">
                     {activeMonthlyReport.hasUpcomingCheckup ? (
@@ -566,17 +685,21 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                 <div className="p-3 bg-[#ECFDF3]/60 rounded-lg border border-[#A7F3D0]">
                   <span className="text-[10px] font-mono uppercase text-[#065F46] block">Average Form Score</span>
                   <span className="text-xl font-bold font-mono text-emerald-700 mt-1 block">
-                    {activeMonthlyReport.avgAccuracy}%
+                    {activeMonthlyReport.measuredSessions > 0 ? `${activeMonthlyReport.avgAccuracy}%` : 'N/A'}
                   </span>
-                  <span className="text-[11px] text-emerald-800">Computer vision alignment</span>
+                  <span className="text-[11px] text-emerald-800">
+                    {activeMonthlyReport.measuredSessions > 0
+                      ? `From ${activeMonthlyReport.measuredSessions} measured session(s)`
+                      : 'No measured session this month'}
+                  </span>
                 </div>
 
                 <div className="p-3 bg-[#F0F7FF]/60 rounded-lg border border-blue-200">
-                  <span className="text-[10px] font-mono uppercase text-blue-700 block">Adherence Rate</span>
+                  <span className="text-[10px] font-mono uppercase text-blue-700 block">Days Active</span>
                   <span className="text-xl font-bold font-mono text-blue-700 mt-1 block">
-                    {activeMonthlyReport.adherencePercent}%
+                    {activeMonthlyReport.activeDaysPercent}%
                   </span>
-                  <span className="text-[11px] text-blue-800">{activeMonthlyReport.missedSessions} missed sessions</span>
+                  <span className="text-[11px] text-blue-800">of elapsed days had a session</span>
                 </div>
               </div>
             </div>
@@ -624,17 +747,17 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                   3. Kinematic Trajectory & Progress Trend
                 </h3>
                 <p className="text-xs text-slate-700 leading-relaxed bg-white p-3.5 rounded-lg border border-slate-200">
-                  {activeMonthlyReport.progressTrend} Patient maintains stable joint angles within 90-degree flexion boundaries with no reported joint flare-ups.
+                  {activeMonthlyReport.progressTrend}
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div className="p-3 bg-white rounded-lg border border-slate-200">
-                  <span className="font-semibold text-slate-800 block">Safety & SOS Events</span>
+                  <span className="font-semibold text-slate-800 block">Measurement Coverage</span>
                   <p className="text-slate-600 mt-0.5">
-                    {activeMonthlyReport.safetyEventsCount === 0 
-                      ? 'No emergency triggers or adverse kinematic anomalies flagged during workouts.' 
-                      : `${activeMonthlyReport.safetyEventsCount} alerts recorded.`}
+                    {activeMonthlyReport.measuredSessions === activeMonthlyReport.totalSessions
+                      ? 'Every session this month included a measured movement.'
+                      : `${activeMonthlyReport.totalSessions - activeMonthlyReport.measuredSessions} of ${activeMonthlyReport.totalSessions} session(s) recorded no measurement. No safety-event or adverse-anomaly classification is produced.`}
                   </p>
                 </div>
 
@@ -681,14 +804,14 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
                         ? 'bg-[#ECFDF3] text-[#065F46] border-[#A7F3D0]'
                         : 'bg-[#FFF8E6] text-[#92400E] border-[#FDE68A]'
                     }`}>
-                      {rpt.emailStatus === 'Sent' ? 'Dispatched via Email' : 'Draft / Ready'}
+                      {rpt.emailStatus === 'Sent' ? 'Marked sent' : 'Draft - not sent'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
-                    Generated: {rpt.generatedDate} • {rpt.totalSessions} sessions ({rpt.totalReps} total reps) • Avg Accuracy: {rpt.avgAccuracy}%
+                    Generated: {rpt.generatedDate} • {rpt.totalSessions} sessions ({rpt.totalReps} total reps) • Form score: {rpt.measuredSessions > 0 ? `${rpt.avgAccuracy}% from ${rpt.measuredSessions} measured` : 'not measured'}
                   </p>
                   <p className="text-[11px] text-slate-600 font-mono">
-                    Recipients: {rpt.recipients.join(', ')}
+                    Recipients (intended): {rpt.recipients.join(', ')}
                   </p>
                 </div>
 
@@ -713,7 +836,7 @@ ${report.emailSentDate ? `- Sent Date: ${report.emailSentDate}` : ''}
 
                   {rpt.emailStatus !== 'Sent' && (
                     <button
-                      onClick={() => handleSendEmail(rpt.id)}
+                      onClick={() => handleSendEmail(rpt)}
                       className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
                     >
                       <Send className="w-3 h-3 fill-white" />

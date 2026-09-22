@@ -52,6 +52,7 @@ export function DashboardHome({
   });
 
   const [sosSent, setSosSent] = useState<boolean>(false);
+  const [sosError, setSosError] = useState<string | null>(null);
 
   const toggleSection = (sectionKey: keyof typeof openSections) => {
     setOpenSections((prev) => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
@@ -62,9 +63,12 @@ export function DashboardHome({
   // STRICT REQUIREMENT 10: Today's activity only on dashboard!
   const todaySessions = getTodaySessions(sessions);
   const todayReps = todaySessions.reduce((acc, s) => acc + s.reps, 0);
-  const todayAvgAccuracy = todaySessions.length > 0
-    ? Math.round(todaySessions.reduce((acc, s) => acc + s.formAccuracy, 0) / todaySessions.length)
-    : 0;
+  // Form score is averaged over measured sessions only, and is reported as
+  // "not measured" rather than 0% when nothing was measured today.
+  const todayMeasured = todaySessions.filter((s) => s.metricsSource === 'pose_inference');
+  const todayAvgAccuracy = todayMeasured.length > 0
+    ? Math.round(todayMeasured.reduce((acc, s) => acc + s.formAccuracy, 0) / todayMeasured.length)
+    : null;
   const todayDurationMinutes = Math.round(todaySessions.reduce((acc, s) => acc + s.durationSec, 0) / 60);
 
   // Exercises completed today
@@ -76,24 +80,40 @@ export function DashboardHome({
     (a) => a.status === 'confirmed' || a.status === 'ready' || a.status === 'approved' || a.status === 'scheduled'
   ) || appointments[0];
 
-  // Emergency SOS trigger
+  // Emergency SOS trigger.
+  //
+  // This opens a pre-filled WhatsApp conversation in a new tab. Nothing is
+  // transmitted by the application: the guardian receives the message only if
+  // the patient presses send in WhatsApp. Automatic dispatch is not implemented,
+  // so the UI says "conversation opened" rather than claiming an alert was
+  // delivered.
   const handleTriggerSos = () => {
-    const phone = user.guardianWhatsapp || user.emergencyContactPhone || '+91 98765 43210';
+    const phone = user.guardianWhatsapp || user.emergencyContactPhone;
     const cleanPhone = phone.replace(/[^0-9]/g, '');
+
+    if (!cleanPhone) {
+      setSosSent(false);
+      setSosError('No guardian number is on file. Add one in your medical profile.');
+      setTimeout(() => setSosError(null), 6000);
+      return;
+    }
+
     const message = encodeURIComponent(
       `[PhysioAI Alert] ${user.name} reported pain spike (${user.painIntensity}/10) during rehabilitation routine. Emergency contact request.`
     );
     const link = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${message}`;
 
+    // Records that the patient opened the emergency flow. The text states what
+    // actually happened, not that a message was delivered.
     logGuardianAlert({
       userId: user.id,
       alertType: 'emergency_help',
-      message: `Emergency notification dispatched to guardian (${user.emergencyContactName || 'Emergency Contact'})`,
+      message: `Patient opened an emergency WhatsApp message for ${user.emergencyContactName || 'Emergency Contact'}. Delivery depends on the patient pressing send in WhatsApp.`,
       sentTo: phone,
     });
 
     setSosSent(true);
-    setTimeout(() => setSosSent(false), 5000);
+    setTimeout(() => setSosSent(false), 8000);
     window.open(link, '_blank');
   };
 
@@ -321,9 +341,11 @@ export function DashboardHome({
                 <div>
                   <span className="text-slate-500 block text-[11px] uppercase tracking-wider">Today's Form Score</span>
                   <span className="text-xl font-bold font-mono text-emerald-600 mt-0.5 block">
-                    {todayAvgAccuracy > 0 ? `${todayAvgAccuracy}%` : 'N/A'}
+                    {todayAvgAccuracy === null ? 'N/A' : `${todayAvgAccuracy}%`}
                   </span>
-                  <span className="text-[11px] text-slate-500">Computer vision alignment</span>
+                  <span className="text-[11px] text-slate-500">
+                    {todayAvgAccuracy === null ? 'No measured session today' : 'From pose-inference sessions'}
+                  </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block text-[11px] uppercase tracking-wider">Today's Active Time</span>
@@ -501,9 +523,20 @@ export function DashboardHome({
                       className="w-full py-2 px-3 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                     >
                       <ShieldAlert className="w-3.5 h-3.5 text-red-600" />
-                      <span>{sosSent ? 'Emergency Alert Sent!' : 'Dispatch Guardian SOS Alert'}</span>
+                      <span>{sosSent ? 'WhatsApp opened - press Send' : 'Open Emergency WhatsApp Message'}</span>
                     </button>
                   </div>
+
+                  <p className="text-[11px] text-slate-500 pt-1 leading-snug">
+                    Opens a pre-filled WhatsApp message to your guardian. The message is only
+                    delivered once you press send in WhatsApp. No alert is sent automatically.
+                  </p>
+
+                  {sosError && (
+                    <p className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1">
+                      {sosError}
+                    </p>
+                  )}
                 </div>
 
               </div>

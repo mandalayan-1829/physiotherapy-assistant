@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   Activity, 
   AlertCircle, 
@@ -19,8 +19,9 @@ import {
   Users, 
   Video 
 } from 'lucide-react';
-import { Appointment, AppointmentStatus, Doctor, MonthlyReport, Session, User } from '../types';
-import { getHistoricalDailyEntries, getMonthlyReports } from '../utils/storage';
+import { Appointment, AppointmentStatus, Doctor, Session, User } from '../types';
+import { getHistoricalDailyEntries } from '../utils/storage';
+import { listReports } from '../services/physio';
 
 export interface DoctorPatientSummary {
   account_id: number;
@@ -70,7 +71,45 @@ export function DoctorDashboard({
     hospital: '',
   };
 
-  const monthlyReports = getMonthlyReports();
+  // Reports are stored per patient on the server. This counts them for the
+  // patients actually linked to this clinician.
+  //
+  // The previous implementation read `getMonthlyReports()` from localStorage,
+  // which counted report drafts saved by whoever was using this browser - not
+  // reports belonging to these patients. The figure was device-local and
+  // clinically meaningless.
+  const [reportCount, setReportCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const accountIds = linkedPatients.map((patient) => patient.account_id);
+
+    if (accountIds.length === 0) {
+      setReportCount(0);
+      return;
+    }
+
+    void (async () => {
+      try {
+        // Presentation context is irrelevant to a count, so nothing patient
+        // specific is passed.
+        const counts = await Promise.all(
+          accountIds.map((accountId) =>
+            listReports({ hasUpcomingCheckup: false }, accountId).then((rows) => rows.length),
+          ),
+        );
+        if (!cancelled) setReportCount(counts.reduce((total, n) => total + n, 0));
+      } catch {
+        // `null` renders as an em dash: an unavailable figure, never a zero that
+        // would read as "this patient has no reports".
+        if (!cancelled) setReportCount(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [linkedPatients]);
 
   // Roster derived from the patients actually linked to this clinician.
   // No simulated patient rows are generated.
@@ -78,7 +117,18 @@ export function DoctorDashboard({
   const patients = linkedPatients.map((patient) => {
     const patientSessions = sessions.filter((s) => s.userId === patient.account_id);
     const activeDays = new Set(patientSessions.map((s) => s.date.split(' ')[0]));
-    const adherence = Math.min(100, Math.round((activeDays.size / 7) * 100));
+    // Days with a recorded session inside the last 7 days. Counting every
+    // distinct day the patient has ever trained would report a long-standing
+    // patient as permanently "100% adherent".
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const windowStartStr = sevenDaysAgo.toISOString().split('T')[0];
+    const recentActiveDays = new Set(
+      patientSessions
+        .map((s) => s.date.split(' ')[0])
+        .filter((day) => day >= windowStartStr && day <= todayStr),
+    );
+    const adherence = Math.min(100, Math.round((recentActiveDays.size / 7) * 100));
     const latest = patientSessions
       .map((s) => s.date)
       .sort((a, b) => b.localeCompare(a))[0];
@@ -102,10 +152,12 @@ export function DoctorDashboard({
     };
   });
 
+  // Only sessions with an actual measurement contribute to the form average.
+  const measuredSessions = sessions.filter((s) => s.metricsSource === 'pose_inference');
   const overallFormAverage =
-    sessions.length > 0
-      ? Math.round(sessions.reduce((acc, s) => acc + s.formAccuracy, 0) / sessions.length)
-      : 0;
+    measuredSessions.length > 0
+      ? Math.round(measuredSessions.reduce((acc, s) => acc + s.formAccuracy, 0) / measuredSessions.length)
+      : null;
 
   const filteredAppointments = appointments.filter((appt) => {
     const matchesStatus = selectedStatusFilter === 'all' || appt.status === selectedStatusFilter;
@@ -186,16 +238,22 @@ export function DoctorDashboard({
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
           <span className="text-[11px] font-mono uppercase text-slate-500 block">Monthly Reports</span>
-          <span className="text-2xl font-bold font-mono text-slate-900 mt-1 block">{monthlyReports.length}</span>
-          <span className="text-xs text-slate-500 mt-0.5 block">Clinical evaluations compiled</span>
+          <span className="text-2xl font-bold font-mono text-slate-900 mt-1 block">
+            {reportCount === null ? '—' : reportCount}
+          </span>
+          <span className="text-xs text-slate-500 mt-0.5 block">Stored on the server for your patients</span>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-mono uppercase text-slate-500 block">Kinematic Form Avg</span>
+          <span className="text-[11px] font-mono uppercase text-slate-500 block">Form Score Avg</span>
           <span className="text-2xl font-bold font-mono text-emerald-600 mt-1 block">
-            {sessions.length > 0 ? `${overallFormAverage}%` : '—'}
+            {overallFormAverage === null ? '—' : `${overallFormAverage}%`}
           </span>
-          <span className="text-xs text-slate-500 mt-0.5 block">Across recorded patient sessions</span>
+          <span className="text-xs text-slate-500 mt-0.5 block">
+            {measuredSessions.length === 0
+              ? 'No measured session yet'
+              : `From ${measuredSessions.length} of ${sessions.length} session(s)`}
+          </span>
         </div>
       </div>
 
@@ -320,7 +378,8 @@ export function DoctorDashboard({
               Assigned Patients Roster
             </h2>
             <p className="text-xs text-slate-500">
-              Monitor compliance, pain trajectories, and latest exercise activity.
+              Patients linked to your account, with their recorded session activity and
+              self-reported pain score.
             </p>
           </div>
           <span className="text-xs font-mono text-slate-500">{patients.length} registered patients</span>
@@ -340,7 +399,7 @@ export function DoctorDashboard({
                 <p className="text-xs text-slate-600">Protocol: {pat.condition}</p>
                 <div className="flex items-center gap-4 text-xs text-slate-500 mt-1">
                   <span>Pain Level: <strong className="text-slate-800">{pat.painScore}/10</strong></span>
-                  <span>Adherence: <strong className="text-emerald-600">{pat.adherence}%</strong></span>
+                  <span>Active days (7d): <strong className="text-emerald-600">{pat.adherence}%</strong></span>
                   <span>Last Active: {pat.lastSession}</span>
                 </div>
               </div>
